@@ -64,6 +64,13 @@ Install the bundled Oxlint plugin into the current repository and integrate it w
 
 5. Run the repository's lint command and typecheck. If findings appear, report them and fix them only when the user asked for migration/cleanup. Do not suppress rules, weaken rule severity, add unsafe casts, or mechanically launder types to make lint pass.
 
+   Apply the Kaia rule semantics while migrating:
+   - Preserve exact object contracts and genuinely dynamic dictionary accumulators; do not widen fixed populated values to open dictionaries.
+   - Decode explicitly `unknown` inputs with the project's schema library instead of branching on runtime `typeof`.
+   - Rename locally controlled declarations containing `shape`; external member access such as `schema.shape` is allowed.
+   - Keep an `unknown` parameter only for unavoidable raw ingress. Add a nearby, substantive `BOUNDARY:` comment naming the external source and decode it immediately.
+   - Remove avoidable assertions. For the rare assertion backed by a checked invariant, place a specific `SAFETY:` comment immediately before it.
+
 6. Review the final diff and clearly report:
    - copied path,
    - dependency versions installed,
@@ -72,4 +79,4 @@ Install the bundled Oxlint plugin into the current repository and integrate it w
 
 ## Migration guidance
 
-When replacing an older local copy, compare its rules and diagnostics before overwriting. Keep project-specific rules in their own plugin; anti-slop is intentionally generic. Prefer inference, `as const`, `satisfies`, named owner contracts, and boundary parsing when resolving findings.
+When replacing an older local copy, compare its rules and diagnostics before overwriting. Keep project-specific rules in their own plugin; anti-slop is intentionally generic. Prefer inference, `as const`, `satisfies`, named owner contracts, schema decoding, typed dependency seams, and constructor-injected test doubles when resolving findings.

@@ -1,15 +1,23 @@
-# anti-slop
+# Kaia anti-slop
 
-[![skills.sh](https://skills.sh/b/dmmulroy/anti-slop)](https://skills.sh/dmmulroy/anti-slop)
+Kaia Systems' maintained fork of
+[dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop).
 
 Opinionated Oxlint rules that reject low-evidence and low-signal TypeScript and JavaScript patterns.
 
 This project is meant to be vendored, not treated as a fixed npm dependency. Copy the rules into your repository, read them, and change them to match your team's standards. The bundled agent skill handles the initial copy and configuration; after that, the vendored files are yours to maintain and make your own.
 
+The Kaia ruleset enables all rules. It narrows a few upstream checks to keep them
+high-signal: exact object contracts and dynamic dictionary accumulators preserve
+evidence, runtime `typeof` is rejected specifically for explicitly `unknown`
+inputs, `shape` is checked in declarations under our control rather than external
+member names, and unavoidable raw `unknown` parameters require a substantive
+nearby `BOUNDARY:` comment.
+
 ## Install with an agent skill
 
 ```bash
-npx skills add dmmulroy/anti-slop --skill install-anti-slop
+npx skills add KAIA-SYSTEMS/anti-slop --skill install-anti-slop
 ```
 
 Then ask your coding agent to install or configure anti-slop in the current repository. The skill copies the plugin, installs current Oxlint dependencies, merges the plugin into the existing lint configuration, enables every rule, and validates the result.
@@ -17,7 +25,7 @@ Then ask your coding agent to install or configure anti-slop in the current repo
 To inspect available skills first:
 
 ```bash
-npx skills add dmmulroy/anti-slop --list
+npx skills add KAIA-SYSTEMS/anti-slop --list
 ```
 
 ## Manual local installation
@@ -59,14 +67,14 @@ The same `jsPlugins` entry and rules work under `lint` in a Vite+ config.
 
 - `no-chained-type-assertions` — rejects nested type assertions that fabricate evidence.
 - `no-conditional-empty-object-spread` — rejects conditional spreads that use `{}` to omit fields.
-- `no-known-value-widening` — rejects explicit broad target types that discard known value evidence.
+- `no-known-value-widening` — rejects known values widened to `unknown`, `object`, or open dictionaries while permitting exact object contracts and genuinely dynamic dictionary accumulators.
 - `no-module-mocking` — rejects Vitest and Jest module mocks in favor of real dependency seams.
 - `no-object-parameters` — rejects the broad `object` type on function inputs.
 - `no-reflect-apply` — rejects `Reflect.apply` in favor of typed function calls.
 - `no-reflect-get` — rejects `Reflect.get` in favor of typed property access or boundary parsing.
-- `no-runtime-typeof` — requires boundary parsing instead of ad hoc `typeof` narrowing.
-- `no-shape-in-symbol-names` — rejects `shape` in symbol names.
-- `no-unknown-parameters` — rejects `unknown` inputs except the explicit `cause` convention.
+- `no-runtime-typeof` — requires schema decoding instead of ad hoc `typeof` narrowing for explicitly `unknown` values; typed-union branching and feature detection remain valid.
+- `no-shape-in-symbol-names` — rejects `shape` in locally controlled declaration names without banning external member access such as `schema.shape`.
+- `no-unknown-parameters` — rejects `unknown` inputs unless a nearby `BOUNDARY:` comment names the unavoidable raw source and callers decode it immediately.
 - `no-unknown-returns` — rejects function contracts that return `unknown` or `Promise<unknown>`.
 - `no-unknown-type-aliases` — rejects aliases that merely conceal `unknown`.
 - `no-unsafe-dictionary-type` — rejects dictionary value contracts based on `unknown`, `any`, `object`, `{}`, and semantic equivalents.
@@ -101,6 +109,13 @@ const handlers: Record<string, Handler> = {
 
 This discards the known `start` key. Preserve inference or use `satisfies Record<string, Handler>` instead.
 
+A genuinely dynamic accumulator remains valid:
+
+```ts
+const handlers: Record<string, Handler> = {};
+handlers[name] = handler;
+```
+
 ### `no-module-mocking`
 
 ```ts
@@ -128,10 +143,15 @@ const value = Reflect.get(owner, key);
 ### `no-runtime-typeof`
 
 ```ts
-if (typeof input === "string") {
-  useName(input);
+function decode(input: unknown) {
+  if (typeof input === "string") {
+    useName(input);
+  }
 }
 ```
+
+Decode the boundary with a schema instead. `typeof` over a typed union and
+feature detection such as `typeof Headers !== "undefined"` remain valid.
 
 ### `no-shape-in-symbol-names`
 
@@ -145,6 +165,16 @@ interface UserShape {
 
 ```ts
 function handle(input: unknown) {}
+```
+
+When a framework or external protocol makes `unknown` unavoidable, document the
+source and decode immediately:
+
+```ts
+// BOUNDARY: message is raw JSON supplied by the WebSocket peer.
+function handle(message: unknown) {
+  return Schema.decodeUnknownSync(MessageSchema)(message);
+}
 ```
 
 ### `no-unknown-returns`
@@ -188,6 +218,10 @@ Add a specific justification immediately before a necessary assertion:
 // SAFETY: parseUserId validated the identifier before branding it.
 const userId = value as UserId;
 ```
+
+This rule covers TypeScript `as Type` assertions and angle-bracket assertions.
+It does not cover `as const`, `satisfies`, ordinary type annotations, or
+non-null (`!`) assertions.
 
 ## Development
 

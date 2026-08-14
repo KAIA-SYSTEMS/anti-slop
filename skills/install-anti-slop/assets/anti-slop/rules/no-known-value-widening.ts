@@ -126,6 +126,33 @@ function isDictionaryAccumulatorTarget(destination: WideningTarget): boolean {
 	return destination.kind === "open dictionary" || destination.kind === "generic container";
 }
 
+function isProxyConstruction(expression: ESTree.Expression): boolean {
+	const unwrapped = unwrapExpression(expression);
+	return (
+		unwrapped.type === "NewExpression" &&
+		unwrapped.callee.type === "Identifier" &&
+		unwrapped.callee.name === "Proxy"
+	);
+}
+
+function isDictionaryAccumulator(
+	sourceCode: SourceCode,
+	expression: ESTree.Expression,
+): boolean {
+	const unwrapped = unwrapExpression(expression);
+	if (isEmptyObjectExpression(unwrapped) || isProxyConstruction(unwrapped)) return true;
+	if (unwrapped.type !== "Identifier") return false;
+	const variable = resolveVariable(sourceCode, unwrapped);
+	if (variable === null) return false;
+	const declarator = variableDeclarator(variable);
+	return (
+		declarator !== null &&
+		declarator.init !== null &&
+		isStableConstVariable(variable, declarator) &&
+		(isEmptyObjectExpression(declarator.init) || isProxyConstruction(declarator.init))
+	);
+}
+
 function hasParentAssertion(node: ESTree.Node): boolean {
 	return node.parent?.type === "TSAsExpression" || node.parent?.type === "TSTypeAssertion";
 }
@@ -154,7 +181,7 @@ export const noKnownValueWideningRule = defineRule({
 			if (destination === null) return;
 			if (
 				isDictionaryAccumulatorTarget(destination) &&
-				isEmptyObjectExpression(expression)
+				isDictionaryAccumulator(context.sourceCode, expression)
 			) {
 				return;
 			}

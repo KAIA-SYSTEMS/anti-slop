@@ -25,11 +25,16 @@ tester.run("anti-slop/no-known-value-widening", noKnownValueWideningRule, {
 		`${prelude} type Commands = Record<string, Command>; const commands = { start: startCommand } as const satisfies Commands;`,
 		`${prelude} interface Commands { readonly start: Command } const commands: Commands = { start: startCommand };`,
 		`${prelude} type Commands = { readonly start: Command }; const commands: Commands = { start: startCommand };`,
+		`${prelude} const commands: { start: Command } = { start: startCommand };`,
 		`${prelude} type PermissionLevels = { readonly [Level in Permission]: number }; const levels: PermissionLevels = { admin: 1 };`,
 		`${prelude} function create() { return { start: startCommand }; }`,
 		`${prelude} interface Commands { readonly start: Command } function create(): Commands { return { start: startCommand }; }`,
+		`${prelude} function create(): { readonly start: Command } { return { start: startCommand }; }`,
+		`${prelude} const create = (): { readonly start: Command } => ({ start: startCommand });`,
 		`${prelude} declare function make(): Record<string, Command>; const commands: Record<string, Command> = make();`,
 		`${prelude} import { Commands } from './types'; const commands: Commands = { start: startCommand };`,
+		`${prelude} function create(): Record<string, Command> { const commands: Record<string, Command> = {}; commands.start = startCommand; return commands; }`,
+		`${prelude} const commands: Record<string, Command> = new Proxy({}, { get: () => startCommand });`,
 	],
 	invalid: [
 		{ code: "const value: unknown = {};", errors: [error] },
@@ -46,10 +51,6 @@ tester.run("anti-slop/no-known-value-widening", noKnownValueWideningRule, {
 		},
 		{
 			code: `${prelude} const commands: { [K in string]: Command } = { start: startCommand };`,
-			errors: [error],
-		},
-		{
-			code: `${prelude} const commands: { start: Command } = { start: startCommand };`,
 			errors: [error],
 		},
 		{
@@ -70,10 +71,6 @@ tester.run("anti-slop/no-known-value-widening", noKnownValueWideningRule, {
 		},
 		{
 			code: `${prelude} function create(): Record<string, Command> { return { start: startCommand }; }`,
-			errors: [error],
-		},
-		{
-			code: `${prelude} function create(): { start: Command } { return { start: startCommand }; }`,
 			errors: [error],
 		},
 		{
