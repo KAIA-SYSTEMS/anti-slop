@@ -3,6 +3,8 @@ import { defineRule } from "@oxlint/plugins";
 import {
 	classifyUnsafeDictionary,
 	classifyUnsafeDictionaryValue,
+	classifyUnsafeDefaults,
+	isReportedDefaultReference,
 	createTypeEnvironment,
 	type TypeEnvironment,
 } from "../shared/dictionary-types.ts";
@@ -69,15 +71,24 @@ function isInsideTypeAliasDeclaration(node: ESTree.Node): boolean {
 function isPlainAliasConsumerUse(node: ESTree.TSType, environment: TypeEnvironment): boolean {
 	if (node.type !== "TSTypeReference" || node.typeArguments?.params.length) return false;
 	const name = typeReferenceName(node);
-	return name !== null && environment.aliases.has(name) && !isInsideTypeAliasDeclaration(node);
+	const alias = name === null ? undefined : environment.aliases.get(name);
+	return (
+		alias !== undefined &&
+		!alias.typeParameters?.params.length &&
+		!isInsideTypeAliasDeclaration(node)
+	);
 }
 
 function shouldReportType(node: ESTree.TSType, environment: TypeEnvironment): boolean {
+	if (isReportedDefaultReference(node, environment, "dictionary")) return false;
 	if (isPlainAliasConsumerUse(node, environment)) return false;
 	if (classifyUnsafeDictionary(node, environment) === null) return false;
 	let current: ESTree.Node | null = node.parent;
 	while (current !== null && current.type !== "Program") {
-		if (isTypeNode(current) && classifyUnsafeDictionary(current, environment) !== null)
+		if (
+			(isTypeNode(current) || current.type === "TSInterfaceHeritage") &&
+			classifyUnsafeDictionary(current, environment) !== null
+		)
 			return false;
 		current = current.parent;
 	}
@@ -108,14 +119,28 @@ export const noUnsafeDictionaryTypeRule = defineRule({
 			if (unsafe === null) return;
 			report(node, unsafe.unsafeValue);
 		};
+		const inspectDefaults = (
+			node: ESTree.TSTypeAliasDeclaration | ESTree.TSInterfaceDeclaration,
+		) => {
+			if (environment === null) return;
+			const unsafe = classifyUnsafeDefaults(node, environment, "dictionary");
+			if (unsafe !== null) report(node, unsafe.unsafeValue);
+		};
 
 		return {
+			TSTypeAliasDeclaration: inspectDefaults,
+			TSInterfaceDeclaration: inspectDefaults,
 			Program(node) {
-				environment = createTypeEnvironment(node);
+				environment = createTypeEnvironment(node, context.sourceCode);
 			},
 			TSTypeReference: reportIfUnsafe,
 			TSTypeLiteral: reportIfUnsafe,
 			TSMappedType: reportIfUnsafe,
+			TSInterfaceHeritage(node) {
+				if (environment === null) return;
+				const unsafe = classifyUnsafeDictionary(node, environment);
+				if (unsafe !== null) report(node, unsafe.unsafeValue);
+			},
 			TSIndexSignature(node) {
 				if (
 					environment === null ||

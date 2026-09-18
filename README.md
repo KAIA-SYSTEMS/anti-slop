@@ -55,6 +55,8 @@ export default defineConfig({
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-unsafe-map-type": "error",
+    "anti-slop/no-unsafe-utility-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
   }
@@ -77,9 +79,47 @@ The same `jsPlugins` entry and rules work under `lint` in a Vite+ config.
 - `no-unknown-parameters` — rejects `unknown` inputs unless a nearby `BOUNDARY:` comment names the unavoidable raw source and callers decode it immediately.
 - `no-unknown-returns` — rejects function contracts that return `unknown` or `Promise<unknown>`.
 - `no-unknown-type-aliases` — rejects aliases that merely conceal `unknown`.
-- `no-unsafe-dictionary-type` — rejects dictionary value contracts based on `unknown`, `any`, `object`, `{}`, and semantic equivalents.
+- `no-unsafe-dictionary-type` — rejects dictionary value contracts based on `unknown`, `any`, `object`, `Object`, `{}`, and same-file aliases, including generic/defaulted aliases and index-signature interfaces.
+- `no-unsafe-map-type` — rejects loose `Map`/`ReadonlyMap` value types, explicit constructor arguments, same-file constructor aliases/destructuring, local generic factory/class contracts, and standalone empty maps without a type annotation in TypeScript files. Concrete contextually typed maps, JavaScript empty maps, and `WeakMap` remain valid.
+- `no-unsafe-utility-type` — rejects `Readonly`, `Partial`, `Required`, `Pick`, and `Omit` applied to loose source contracts rather than concrete owner types.
 - `no-widen-then-assert` — rejects local flows that widen known values and later assert them back.
 - `require-safety-comment-for-type-assertion` — requires each non-const assertion to document its checked invariant.
+
+## Scope and performance
+
+These rules use Oxlint's ESTree and lexical scopes, without starting a TypeScript
+compiler, reading imported files, or loading another parser. Rule regression tests
+run through `pnpm test`, never during linting.
+
+The bounded local analysis covers:
+
+- Same-file aliases/interfaces, supplied generic arguments, and unsafe defaults
+  at alias/interface declarations, even when the declaration is not used.
+- Nested container properties, arrays, `NoInfer`, direct loose `Awaited` values,
+  and literal property/tuple indexed types.
+- Constant constructor aliases, object/array destructuring, and parameters with
+  `typeof Map` or destructured `typeof globalThis` contracts.
+- `typeof` queries over explicit annotations and their literal projections,
+  including destructured/rest bindings in straight-line code.
+- Local generic factories with explicit return annotations or a single return
+  expression; returned object properties and nongeneric arrow closures; class
+  inheritance, instance fields, and constructor parameter properties.
+- Omitted generic arguments on context-free, zero-argument calls/construction
+  when the local declaration has no input parameters; defaults and constraints
+  are honored. Argument and contextual inference are not guessed.
+
+This is not compiler-backed semantic analysis. Conditional types/`infer`, general
+utility-type evaluation, imported contracts, namespace/re-export chains, and
+arbitrary function bodies remain outside its scope. Queries needing control-flow
+narrowing and mutated/escaping constructor holders are deliberately skipped.
+Empty maps inside calls or object literals may receive a contextual contract from
+another file, so the rule does not assume they are untyped. Run the project's
+normal typecheck separately, noting that TypeScript itself does not enforce these
+stylistic bans on otherwise-valid broad types.
+
+Object dictionary and explicit map contracts reject loose values regardless of
+whether keys are finite, numeric, or arbitrary strings. A string-key-only semantic
+gate therefore has a different policy and should not be treated as equivalent.
 
 ## Violation examples
 

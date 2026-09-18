@@ -10,6 +10,9 @@ const prelude = "type Command = () => void; const startCommand = () => {};";
 
 tester.run("anti-slop/no-known-value-widening", noKnownValueWideningRule, {
 	valid: [
+		"type Owner<Value> = { items: Record<string, Value> }; function create<Value>(items: Record<string, Value>): Owner<Value> { return { items }; }",
+		"type Owner<Value> = { items: Record<string, Value> }; const owner: Owner<string> = { items: { name: 'value' } };",
+		"type Owner<Value> = Record<string, Value>[]; const owner: Owner<string> = [{ name: 'value' }];",
 		`${prelude} const commands: Record<string, Command> = {};`,
 		`${prelude} type Index<T> = Record<string, T>; const commands: Index<Command> = {};`,
 		`${prelude} class Registry { commands: Record<string, Command> = {}; }`,
