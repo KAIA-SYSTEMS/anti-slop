@@ -45,7 +45,8 @@ export default defineConfig({
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-known-value-widening": "error",
-    "anti-slop/no-module-mocking": "error",
+    "anti-slop/no-mocking": "error",
+    "anti-slop/no-fake-timers": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
@@ -70,7 +71,8 @@ The same `jsPlugins` entry and rules work under `lint` in a Vite+ config.
 - `no-chained-type-assertions` — rejects nested type assertions that fabricate evidence.
 - `no-conditional-empty-object-spread` — rejects conditional spreads that use `{}` to omit fields.
 - `no-known-value-widening` — rejects known values widened to `unknown`, `object`, or open dictionaries while permitting exact object contracts and genuinely dynamic dictionary accumulators.
-- `no-module-mocking` — rejects Vitest and Jest module mocks in favor of real dependency seams.
+- `no-mocking` — rejects Vitest and Jest mocks, spies, stubs, mock configuration and inspection, mock matchers, mock type/value imports, and mocking libraries; test through the real interface.
+- `no-fake-timers` — rejects Vitest and Jest fake clock/timer APIs and imports from `@sinonjs/fake-timers`; use real timer behavior.
 - `no-object-parameters` — rejects the broad `object` type on function inputs.
 - `no-reflect-apply` — rejects `Reflect.apply` in favor of typed function calls.
 - `no-reflect-get` — rejects `Reflect.get` in favor of typed property access or boundary parsing.
@@ -156,10 +158,69 @@ const handlers: Record<string, Handler> = {};
 handlers[name] = handler;
 ```
 
-### `no-module-mocking`
+### `no-mocking`
+
+Reports Vitest and Jest mock factories, spies, module mocking/unmocking, mocked
+imports, hoisting, global/environment stubs and mock lifecycle APIs. It also
+reports mock configuration methods on any receiver, reads of `.mock.calls`,
+`.mock.results`, `.mock.lastCall`, `.mock.instances`, and `.mock.invocationCallOrder`,
+and call/return mock matchers, including after `.not`, `.resolves`, or `.rejects`.
+Computed string member access counts too.
+
+Bad:
 
 ```ts
 vi.mock("./user-store");
+const save = vi.fn().mockResolvedValue(user);
+expect(save).toHaveBeenCalledWith(user);
+```
+
+Good — call the real interface and assert its observable behavior:
+
+```ts
+const saved = await userStore.save(user);
+expect(await userStore.findById(saved.id)).toEqual(saved);
+```
+
+Imports of `Mock`, `MockInstance`, `Mocked`, `MockedFunction`, `MockedObject`, and
+`MockedClass` from `vitest`, `@jest/globals`, or `jest-mock` are reported, including
+type-only imports. Static imports, dynamic `import()`, and `require()` of mocking
+libraries are also reported.
+
+The `modules` option replaces the default banned package list:
+`sinon`, `msw`, `nock`, `fetch-mock`, `vitest-mock-extended`, `jest-mock-extended`,
+`ts-mockito`, `testdouble`, and `aws-sdk-client-mock`. Each package also matches its
+subpaths, such as `msw/node`.
+
+```ts
+"anti-slop/no-mocking": ["error", { modules: ["msw", "custom-mocks"] }]
+```
+
+An empty list disables the library import check; mock APIs, metadata, matchers,
+and framework mock type/value imports are still reported. `fake-indexeddb` and
+memory storage are allowed by default.
+
+### `no-fake-timers`
+
+Reports Vitest and Jest calls to `useFakeTimers`, `useRealTimers`, `setSystemTime`,
+`getMockedSystemTime`, `advanceTimersByTime`, `advanceTimersByTimeAsync`,
+`advanceTimersToNextTimer`, `advanceTimersToNextTimerAsync`, `runAllTimers`,
+`runAllTimersAsync`, `runOnlyPendingTimers`, `runOnlyPendingTimersAsync`, and
+`clearAllTimers`, including computed string access. Static imports, dynamic
+`import()`, and `require()` from `@sinonjs/fake-timers` and its subpaths are reported.
+
+Bad:
+
+```ts
+vi.useFakeTimers();
+vi.advanceTimersByTime(100);
+```
+
+Good — await completion through the real interface:
+
+```ts
+const result = await scheduler.runAfter(100, () => "ready");
+expect(result).toBe("ready");
 ```
 
 ### `no-object-parameters`
