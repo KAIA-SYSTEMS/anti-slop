@@ -32,50 +32,184 @@ const defaultModules = [
   "ts-mockito", "testdouble", "aws-sdk-client-mock", "@vitest/spy",
 ];
 
-/** Follow constant aliases back to a framework object or one of its mocking APIs. */
+type MockingSource = "framework" | "method" | null;
+type PropertyPath = readonly string[];
+
+function propertyKey(node: ESTree.Node, computed: boolean): string | null {
+  if (!computed && node.type === "Identifier") return node.name;
+  return node.type === "Literal" && (typeof node.value === "string" || typeof node.value === "number")
+    ? String(node.value) : null;
+}
+
+function arrayIndex(key: string): number | null {
+  return /^(0|[1-9]\d*)$/.test(key) ? Number(key) : null;
+}
+
+/** Project a destructured binding, including members retained by object/array rest. */
+function bindingPath(pattern: ESTree.Node, name: string, path: PropertyPath): PropertyPath | null {
+  if (pattern.type === "Identifier") return pattern.name === name ? path : null;
+  if (pattern.type === "AssignmentPattern") return bindingPath(pattern.left, name, path);
+  if (pattern.type === "ObjectPattern") {
+    for (const property of pattern.properties) {
+      if (property.type === "RestElement") {
+        const rest = bindingPath(property.argument, name, path);
+        if (rest === null || rest.length === 0) continue;
+        const excluded = pattern.properties
+          .filter((member) => member.type === "Property")
+          .map((member) => propertyKey(member.key, member.computed));
+        return excluded.includes(null) || excluded.includes(rest[0]) ? null : rest;
+      }
+      const key = propertyKey(property.key, property.computed);
+      const rest = bindingPath(property.value, name, path);
+      if (key !== null && rest !== null) return [key, ...rest];
+    }
+  }
+  if (pattern.type === "ArrayPattern") {
+    for (const [index, element] of pattern.elements.entries()) {
+      if (element === null) continue;
+      if (element.type === "RestElement") {
+        const rest = bindingPath(element.argument, name, path);
+        const offset = rest === null || rest.length === 0 ? null : arrayIndex(rest[0]);
+        if (rest !== null && offset !== null) return [String(index + offset), ...rest.slice(1)];
+        continue;
+      }
+      const rest = bindingPath(element, name, path);
+      if (rest !== null) return [String(index), ...rest];
+    }
+  }
+  return null;
+}
+
+function unwrap(expression: ESTree.Expression): ESTree.Expression {
+  switch (expression.type) {
+    case "TSAsExpression":
+    case "TSSatisfiesExpression":
+    case "TSNonNullExpression":
+    case "TSTypeAssertion":
+    case "ParenthesizedExpression":
+    case "ChainExpression":
+      return unwrap(expression.expression);
+    default:
+      return expression;
+  }
+}
+
+/** A directly changed holder no longer proves the provenance of its members. */
+function hasStableMembers(variable: Variable): boolean {
+  return variable.references.every((reference) => {
+    let node: ESTree.Node = reference.identifier;
+    while (true) {
+      const parent: ESTree.Node = node.parent;
+      if ((parent.type === "MemberExpression" && parent.object === node) ||
+        ((parent.type === "TSAsExpression" || parent.type === "TSSatisfiesExpression" ||
+          parent.type === "TSNonNullExpression" || parent.type === "TSTypeAssertion" ||
+          parent.type === "ParenthesizedExpression" || parent.type === "ChainExpression") &&
+          parent.expression === node)) {
+        node = parent;
+      } else {
+        return !((parent.type === "AssignmentExpression" && parent.left === node) ||
+          parent.type === "UpdateExpression" ||
+          (parent.type === "UnaryExpression" && parent.operator === "delete"));
+      }
+    }
+  });
+}
+
+function methodSource(path: PropertyPath): MockingSource {
+  return path.length === 0 || (path.length === 1 && (path[0] === "call" || path[0] === "apply"))
+    ? "method" : null;
+}
+
+function frameworkSource(path: PropertyPath): MockingSource {
+  if (path.length === 0) return "framework";
+  return frameworkMethods.has(path[0]) ? methodSource(path.slice(1)) : null;
+}
+
+function moduleSource(module: string, path: PropertyPath): MockingSource {
+  const [name, ...rest] = path;
+  if (((module === "vitest" || module === "vite-plus/test" || module === "@vitest/spy") && name === "vi") ||
+    (module === "@jest/globals" && name === "jest")) return frameworkSource(rest);
+  if ((module === "@vitest/spy" || module === "jest-mock") && frameworkMethods.has(name)) {
+    return methodSource(rest);
+  }
+  return null;
+}
+
+/** Follow stable local aliases and static projections back to a framework mocking API. */
 function mockingSource(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
+  path: PropertyPath = [],
   visited = new Set<Variable>(),
-): "framework" | "method" | null {
+): MockingSource {
+  expression = unwrap(expression);
   if (expression.type === "Identifier") {
-    const identifierName = expression.name;
-    if (isTestFrameworkObject(sourceCode, expression)) return "framework";
     const variable = resolveVariable(expression, sourceCode);
-    if (variable === null || variable.defs.length !== 1 || visited.has(variable)) return null;
+    if (variable === null || variable.defs.length === 0) {
+      return isTestFrameworkObject(sourceCode, expression) ? frameworkSource(path) : null;
+    }
+    if (variable.defs.length !== 1 || visited.has(variable)) return null;
     const [definition] = variable.defs;
-    if (definition.type === "ImportBinding" && definition.parent?.type === "ImportDeclaration" &&
-      isPackageImport(definition.parent.source, ["@vitest/spy"])) {
-      if (definition.node.type === "ImportNamespaceSpecifier") return "framework";
-      const name = importedName(definition.node);
-      return name !== null && frameworkMethods.has(name) ? "method" : null;
+    if (definition.type === "ImportBinding" && definition.parent?.type === "ImportDeclaration") {
+      const declaration = definition.parent;
+      const specifier = definition.node;
+      if (declaration.importKind === "type" ||
+        (specifier.type === "ImportSpecifier" && specifier.importKind === "type")) return null;
+      if (specifier.type === "ImportNamespaceSpecifier" ||
+        (specifier.type === "ImportDefaultSpecifier" && declaration.source.value === "jest-mock")) {
+        return moduleSource(declaration.source.value, path);
+      }
+      const name = importedName(specifier);
+      return name === null ? null : moduleSource(declaration.source.value, [name, ...path]);
     }
     if (definition.type !== "Variable" || definition.node.type !== "VariableDeclarator" ||
       definition.node.init === null || definition.parent?.type !== "VariableDeclaration" ||
-      definition.parent.kind !== "const") return null;
-    const nextVisited = new Set(visited).add(variable);
-    const { id, init } = definition.node;
-    if (id.type === "Identifier") return mockingSource(sourceCode, init, nextVisited);
-    if (id.type !== "ObjectPattern" || mockingSource(sourceCode, init, nextVisited) !== "framework") return null;
-    for (const property of id.properties) {
-      if (property.type !== "Property") continue;
-      const binding = property.value.type === "AssignmentPattern" ? property.value.left : property.value;
-      if (binding.type !== "Identifier" || binding.name !== identifierName) continue;
-      const name = property.computed
-        ? property.key.type === "Literal" && typeof property.key.value === "string" ? property.key.value : null
-        : property.key.type === "Identifier" ? property.key.name : null;
-      return name !== null && frameworkMethods.has(name) ? "method" : null;
-    }
-    return null;
+      (definition.parent.kind !== "const" && definition.parent.kind !== "let") ||
+      variable.references.some((reference) => reference.isWrite() && !reference.init) ||
+      (path.length > 0 && !hasStableMembers(variable))) return null;
+    const projection = bindingPath(definition.node.id, expression.name, path);
+    return projection === null ? null : mockingSource(
+      sourceCode, definition.node.init, projection, new Set(visited).add(variable),
+    );
   }
   if (expression.type === "MemberExpression") {
-    const name = memberName(expression);
-    return name !== null && frameworkMethods.has(name) &&
-      mockingSource(sourceCode, expression.object, visited) === "framework" ? "method" : null;
+    const name = propertyKey(expression.property, expression.computed);
+    return name === null ? null : mockingSource(sourceCode, expression.object, [name, ...path], visited);
   }
-  if (expression.type === "CallExpression" && expression.callee.type === "MemberExpression" &&
-    memberName(expression.callee) === "bind" &&
-    mockingSource(sourceCode, expression.callee.object, visited) === "method") return "method";
+  if (expression.type === "AwaitExpression") return mockingSource(sourceCode, expression.argument, path, visited);
+  if (expression.type === "ImportExpression") {
+    return expression.source.type === "Literal" && typeof expression.source.value === "string"
+      ? moduleSource(expression.source.value, path) : null;
+  }
+  if (expression.type === "CallExpression") {
+    const callee = unwrap(expression.callee);
+    if (callee.type === "Identifier" && callee.name === "require" &&
+      (resolveVariable(callee, sourceCode)?.defs.length ?? 0) === 0) {
+      const source = expression.arguments[0];
+      return source?.type === "Literal" && typeof source.value === "string"
+        ? moduleSource(source.value, path) : null;
+    }
+    if (callee.type === "MemberExpression" && memberName(callee) === "bind" &&
+      mockingSource(sourceCode, callee.object, [], visited) === "method") return methodSource(path);
+  }
+  const [key, ...rest] = path;
+  if (path.length === 0) return null;
+  if (expression.type === "ObjectExpression") {
+    for (const property of [...expression.properties].reverse()) {
+      if (property.type === "SpreadElement") return null;
+      const name = propertyKey(property.key, property.computed);
+      if (name === null) return null;
+      if (name === key) return property.kind === "init"
+        ? mockingSource(sourceCode, property.value, rest, visited) : null;
+    }
+  }
+  if (expression.type === "ArrayExpression") {
+    const index = arrayIndex(key);
+    if (index === null || expression.elements.slice(0, index + 1).some((element) => element?.type === "SpreadElement")) return null;
+    const element = expression.elements[index];
+    return element == null || element.type === "SpreadElement"
+      ? null : mockingSource(sourceCode, element, rest, visited);
+  }
   return null;
 }
 
@@ -148,6 +282,23 @@ export const noMockingRule = defineRule({
         }
       },
       ImportExpression(node) {
+        if (isMockingModule(node.source)) context.report({ node, messageId: "mockImport" });
+      },
+      ExportNamedDeclaration(node) {
+        if (node.source === null) return;
+        if (isMockingModule(node.source)) {
+          context.report({ node, messageId: "mockImport" });
+          return;
+        }
+        for (const specifier of node.specifiers) {
+          const name = specifier.local.type === "Identifier" ? specifier.local.name : specifier.local.value;
+          if (moduleSource(node.source.value, [name]) === "method" ||
+            (frameworkModules.has(node.source.value) && mockImports.has(name))) {
+            context.report({ node: specifier, messageId: "mockImport" });
+          }
+        }
+      },
+      ExportAllDeclaration(node) {
         if (isMockingModule(node.source)) context.report({ node, messageId: "mockImport" });
       },
     };

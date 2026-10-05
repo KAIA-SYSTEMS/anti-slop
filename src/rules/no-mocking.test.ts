@@ -9,6 +9,35 @@ const mockImport = { messageId: "mockImport" };
 
 tester.run("anti-slop/no-mocking", noMockingRule, {
   valid: [
+    "import { vi } from 'vitest'; let make = vi.fn; function replace() { make = realFunction; } make();",
+    "import { vi } from 'vitest'; let make = vi.fn; [make] = [realFunction]; make();",
+    "import { vi } from 'vitest'; const mocks = { make: vi.fn }; mocks.make = realFunction; mocks.make();",
+    "import { vi } from 'vitest'; const mocks = [vi.fn]; mocks[0] = realFunction; mocks[0]();",
+    "import { vi } from 'vitest'; const { fn, ...api } = vi; api.fn();",
+    "import { vi } from 'vitest'; const mocks = { make: vi.fn, ...other }; mocks.make();",
+    "import { vi } from 'vitest'; const mocks = [other, ...items, vi.fn]; mocks[1]();",
+    "import { vi } from 'vitest'; const mocks = { [method]: vi.fn }; mocks.make();",
+    "function work(require: (name: string) => { vi: { fn(): void } }) { require('vitest').vi.fn(); }",
+    "const { vi } = await import('./helper'); vi.fn();",
+    "const { jest } = require('./helper'); jest.fn();",
+    "export { vi } from 'vite-plus/test'; export { jest } from '@jest/globals';",
+    "export { fn } from './helpers'; export * from 'msw-extra';",
+    { code: "export * from 'msw';", options: [{ modules: [] }] },
+    "export { vi } from \"vitest\";", // B17
+    "import vitest from \"vitest\"; vitest.vi.fn();", // B24
+    "import { vi } from \"vitest\"; const make = vi.fn.bind(vi);", // B36
+    "const vi = { fn() {} }; vi.fn();", // F01
+    "import { vi } from \"./helper\"; vi.fn();", // F02
+    "function work(vi: { fn(): void }) { vi.fn(); }", // F03
+    "const object = { fn() {} }; object.fn();", // F04
+    "Array.prototype.bind?.(Array);", // F05
+    "import { vi } from \"vitest\"; function work() { const vi = { fn() {} }; const make = vi.fn; make(); }", // F06
+    "const other = { fn() {} }; const makeStub = other.fn; makeStub();", // F07
+    "import { vi } from \"vitest\"; const f = vi.fn; function work(f: () => void) { f(); }", // F10
+    "const other = { fn() {} }; const f = other.fn.bind(other); f();", // F11
+    "import { vi } from \"vitest\"; let f = vi.fn; f = () => 1; f();", // F12
+    "import type { vi } from \"vitest\"; declare const instance: typeof vi; instance.fn();", // F13
+    "const arr = []; const fn = Array.prototype.map.bind(arr); fn(x => x);", // F14
     "const store = new InMemoryUserStore();",
     "expect(x).toBe(1);",
     "const vi = { mock() {}, fn() {}, spyOn() {} }; vi.mock(); vi.fn(); vi.spyOn();",
@@ -52,6 +81,78 @@ tester.run("anti-slop/no-mocking", noMockingRule, {
     { code: "import 'custom-mocks';", options: [{}] },
   ],
   invalid: [
+    ...[
+      ["vitest", "vi"],
+      ["vite-plus/test", "vi"],
+      ["@jest/globals", "jest"],
+    ].flatMap(([module, api]) => [
+      { code: `import * as ns from '${module}'; ns.${api}.spyOn(store, 'save');`, errors: [mocking] },
+      { code: `const { ${api} } = await import('${module}'); ${api}.mock('./service');`, errors: [mocking] },
+      { code: `const api = (await import('${module}')).${api}; api.fn();`, errors: [mocking] },
+      { code: `const { ${api} } = require('${module}'); ${api}.spyOn(store, 'save');`, errors: [mocking] },
+      { code: `require('${module}').${api}.fn();`, errors: [mocking] },
+      { code: `import { ${api} } from '${module}'; const make = ${api}.fn; make.call(${api}); make.apply(${api}, []);`, errors: [mocking, mocking] },
+    ]),
+    ...["@vitest/spy", "jest-mock"].flatMap((module) => [
+      { code: `import { spyOn as spy } from '${module}'; spy(store, 'save');`, options: [{ modules: [] }], errors: [mocking] },
+      { code: `const { fn: make } = await import('${module}'); make();`, options: [{ modules: [] }], errors: [mocking] },
+      { code: `const make = require('${module}').fn; make();`, options: [{ modules: [] }], errors: [mocking] },
+      { code: `require('${module}').spyOn(store, 'save');`, options: [{ modules: [] }], errors: [mocking] },
+    ]),
+    ...["vi.fn as typeof vi.fn", "<typeof vi.fn>vi.fn", "(vi.fn)", "vi.fn!", "vi.fn satisfies typeof vi.fn"].map((expression) => ({
+      code: `import { vi } from 'vitest'; const make = ${expression}; make();`, errors: [mocking],
+    })),
+    { code: "import { vi } from 'vitest'; (vi.fn as typeof vi.fn)(); vi.fn!();", errors: [mocking, mocking] },
+    { code: "import { vi } from 'vitest'; const mocks = { ['make']: vi.fn }; const { make } = mocks; make();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const mocks = { nested: [vi.fn] }; mocks.nested[0]();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const { spyOn, ...api } = vi; api.fn();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const [first, ...api] = [null, vi.fn]; api[0]();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const mocks = { make: vi.fn, make: realFunction, make: vi.fn }; mocks.make();", errors: [mocking] },
+    ...["sinon", "msw", "nock", "fetch-mock", "vitest-mock-extended", "jest-mock-extended", "ts-mockito", "testdouble", "aws-sdk-client-mock", "@vitest/spy"].flatMap((module) => [
+      { code: `export { fn as make } from '${module}';`, errors: [mockImport] },
+      { code: `export * from '${module}';`, errors: [mockImport] },
+    ]),
+    { code: "export { fn as make } from 'jest-mock';", errors: [mockImport] },
+    { code: "export { fn } from '@vitest/spy';", options: [{ modules: [] }], errors: [mockImport] },
+    { code: "export type { Mock } from 'vite-plus/test';", errors: [mockImport] },
+    { code: "export * from 'msw/node';", errors: [mockImport] },
+    { code: "export { make } from 'custom-mocks/node';", options: [{ modules: ["custom-mocks"] }], errors: [mockImport] },
+    { code: "export * from 'custom-mocks';", options: [{ modules: ["custom-mocks"] }], errors: [mockImport] },
+    { code: "import * as spy from \"@vitest/spy\"; spy.fn();", errors: [mockImport, mocking] }, // B01
+    { code: "import { fn as stub } from \"@vitest/spy\"; stub();", errors: [mockImport, mocking] }, // B02
+    { code: "const { vi } = await import(\"vitest\"); vi.fn();", errors: [mocking] }, // B03
+    { code: "const vi2 = require(\"vitest\").vi; vi2.fn();", errors: [mocking] }, // B04
+    { code: "import { vi } from \"vitest\"; const mocks = { make: vi.fn }; mocks.make();", errors: [mocking] }, // B05
+    { code: "import { vi } from \"vitest\"; const make = () => vi.fn(); make();", errors: [mocking] }, // B06
+    { code: "import { vi } from \"vitest\"; [vi.fn][0]();", errors: [mocking] }, // B07
+    { code: "import { vi } from \"vitest\"; const f = vi[\"fn\"]; f();", errors: [mocking] }, // B08
+    { code: "import { vi } from \"vitest\"; let f = vi.fn; f();", errors: [mocking] }, // B09
+    { code: "import { vi } from \"vitest\"; const make = vi.fn.bind(vi); make();", errors: [mocking] }, // B10
+    { code: "import { vi } from \"vitest\"; const mockModule = vi.mock; mockModule(\"./service\");", errors: [mocking] }, // B11
+    { code: "import { vi } from \"vitest\"; const { mock } = vi; mock(\"./service\");", errors: [mocking] }, // B12
+    { code: "import { jest } from \"@jest/globals\"; const mocks = { make: jest.fn }; mocks.make();", errors: [mocking] }, // B13
+    { code: "const { jest } = await import(\"@jest/globals\"); jest.fn();", errors: [mocking] }, // B14
+    { code: "import { vi as v } from \"vite-plus/test\"; const make = v.fn; make();", errors: [mocking] }, // B15
+    { code: "import type { Mock } from \"vitest\";", errors: [mockImport] }, // B16 / F09
+    { code: "export { fn as makeStub } from \"@vitest/spy\";", errors: [mockImport] }, // B18
+    { code: "import { fn as makeStub } from \"jest-mock\"; makeStub();", errors: [mocking] }, // B19
+    { code: "import * as mocks from \"jest-mock\"; mocks.fn();", errors: [mocking] }, // B20
+    { code: "import * as vitest from \"vitest\"; vitest.vi.fn();", errors: [mocking] }, // B21
+    { code: "import * as globals from \"@jest/globals\"; globals.jest.fn();", errors: [mocking] }, // B22
+    { code: "import mocks from \"jest-mock\"; mocks.fn();", errors: [mocking] }, // B23
+    { code: "import { vi } from \"vitest\"; const [make] = [vi.fn]; make();", errors: [mocking] }, // B25
+    { code: "import { vi } from \"vitest\"; vi.fn.call(vi);", errors: [mocking] }, // B26
+    { code: "import { vi } from \"vitest\"; vi.fn.apply(vi, []);", errors: [mocking] }, // B27
+    { code: "import { vi } from \"vitest\"; const make = vi.fn satisfies typeof vi.fn; make();", errors: [mocking] }, // B28
+    { code: "import { vi } from \"vitest\"; const make = vi.fn!; make();", errors: [mocking] }, // B29
+    { code: "import { vi } from \"vitest\"; const { ...api } = vi; api.fn();", errors: [mocking] }, // B30
+    { code: "import type { Mock } from \"@vitest/spy\";", errors: [mockImport] }, // B31 / F08
+    { code: "const { fn: stub } = await import(\"@vitest/spy\"); stub();", errors: [mockImport, mocking] }, // B32
+    { code: "import * as spy from \"@vitest/spy\"; spy.fn();", options: [{ modules: [] }], errors: [mocking] }, // B33
+    { code: "const { vi } = require(\"vitest\"); vi.fn();", errors: [mocking] }, // B34
+    { code: "import { jest } from \"@jest/globals\"; let make = jest.fn; make();", errors: [mocking] }, // B37
+    { code: "const v = (await import(\"vitest\")).vi; v.fn();", errors: [mocking] }, // B38
+    { code: "import { vi } from \"vitest\"; vi.fn.bind(vi)();", errors: [mocking] }, // B39
     ...[
       "fn", "spyOn", "mock", "doMock", "unmock", "doUnmock", "unstable_mockModule",
       "importMock", "importActual", "mocked", "hoisted", "stubGlobal", "stubEnv",

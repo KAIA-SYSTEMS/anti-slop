@@ -167,6 +167,16 @@ reports mock configuration methods on any receiver, reads of `.mock.calls`,
 and call/return mock matchers, including after `.not`, `.resolves`, or `.rejects`.
 Computed string member access counts too.
 
+Framework APIs are recognised from `vitest`, `vite-plus/test`, `@vitest/spy`,
+`@jest/globals`, and `jest-mock`, including namespace imports, `jest-mock` default
+interop, and static-string dynamic imports and `require()`. Same-file analysis
+follows bindings with no reassignment, static object/array literal members and
+destructuring (including rest), erased TypeScript wrappers, and `.bind()`,
+`.call()`, and `.apply()`. It stops at reassigned bindings, dynamic keys, unknown
+spreads, and directly changed holders; it does not trace arbitrary functions,
+cross-file barrels, mutations through other aliases, or mock configuration method
+aliases.
+
 Bad:
 
 ```ts
@@ -183,14 +193,16 @@ expect(await userStore.findById(saved.id)).toEqual(saved);
 ```
 
 Imports of `Mock`, `MockInstance`, `Mocked`, `MockedFunction`, `MockedObject`, and
-`MockedClass` from `vitest`, `@jest/globals`, or `jest-mock` are reported, including
-type-only imports. Static imports, dynamic `import()`, and `require()` of mocking
-libraries are also reported.
+`MockedClass` from `vitest`, `vite-plus/test`, `@vitest/spy`, `@jest/globals`, or
+`jest-mock` are reported, including type-only imports. Static imports, dynamic
+`import()`, and `require()` of mocking
+libraries are also reported, as are re-exports of banned libraries or named
+framework mocking APIs.
 
 The `modules` option replaces the default banned package list:
 `sinon`, `msw`, `nock`, `fetch-mock`, `vitest-mock-extended`, `jest-mock-extended`,
-`ts-mockito`, `testdouble`, and `aws-sdk-client-mock`. Each package also matches its
-subpaths, such as `msw/node`.
+`ts-mockito`, `testdouble`, `aws-sdk-client-mock`, and `@vitest/spy`. Each package
+also matches its subpaths, such as `msw/node`.
 
 ```ts
 "anti-slop/no-mocking": ["error", { modules: ["msw", "custom-mocks"] }]
