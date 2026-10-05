@@ -10,6 +10,14 @@ const mockImport = { messageId: "mockImport" };
 tester.run("anti-slop/no-mocking", noMockingRule, {
   valid: [
     {
+      // A doubling string literal must neither throw (string length) nor be treated as a key.
+      code: ["import { vi } from 'vitest';", `const s0 = "${"x".repeat(1024)}";`, ...Array.from({ length: 19 }, (_, index) => `const s${index + 1} = s${index} + s${index};`), "const api = { [s19]: vi.fn };", "api.other();"].join("\n"),
+    },
+    {
+      // A string-concatenation DAG must stay inside the step budget (no exponential walk).
+      code: ["import { vi } from 'vitest';", "const k0 = unknownKey;", ...Array.from({ length: 40 }, (_, index) => `const k${index + 1} = k${index} + k${index};`), "const api = { [k40]: vi.fn };", "api.other();"].join("\n"),
+    },
+    {
       code: ["import { vi } from 'vitest';", "const a0 = vi.fn;", ...Array.from({ length: 30 }, (_, index) => `const a${index + 1} = cond ? a${index} : a${index};`), "a30();"].join("\n"),
     },
     {

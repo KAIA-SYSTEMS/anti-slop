@@ -40,14 +40,28 @@ const globalObjects = new Set(["globalThis", "global", "window", "self"]);
 const arrayMutators = new Set(["splice", "push", "pop", "shift", "unshift", "sort", "reverse", "fill", "copyWithin"]);
 type PropertyPath = readonly string[];
 
-function staticString(sourceCode: SourceCode, node: ESTree.Node, depth = 0): string | null {
-  if (depth >= maxResolutionDepth) return null;
-  if (node.type === "Literal" && typeof node.value === "string") return node.value;
-  if (node.type === "TemplateLiteral" && node.expressions.length === 0) return node.quasis[0].value.cooked;
+const maxStaticKeyLength = 256;
+const maxStaticKeySteps = 1_000;
+
+function staticString(
+  sourceCode: SourceCode,
+  node: ESTree.Node,
+  budget = { steps: maxStaticKeySteps },
+  depth = 0,
+): string | null {
+  if (depth >= maxResolutionDepth || budget.steps-- <= 0) return null;
+  if (node.type === "Literal" && typeof node.value === "string") {
+    return node.value.length <= maxStaticKeyLength ? node.value : null;
+  }
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
+    const cooked = node.quasis[0].value.cooked;
+    return cooked !== null && cooked !== undefined && cooked.length <= maxStaticKeyLength ? cooked : null;
+  }
   if (node.type === "BinaryExpression" && node.operator === "+") {
-    const left = staticString(sourceCode, node.left, depth + 1);
-    const right = staticString(sourceCode, node.right, depth + 1);
-    return left === null || right === null ? null : left + right;
+    const left = staticString(sourceCode, node.left, budget, depth + 1);
+    const right = staticString(sourceCode, node.right, budget, depth + 1);
+    if (left === null || right === null || left.length + right.length > maxStaticKeyLength) return null;
+    return left + right;
   }
   if (node.type === "Identifier") {
     const variable = resolveVariable(node, sourceCode);
@@ -56,7 +70,7 @@ function staticString(sourceCode: SourceCode, node: ESTree.Node, depth = 0): str
       definition.node.init !== null && definition.parent?.type === "VariableDeclaration" &&
       definition.parent.kind === "const" &&
       !variable?.references.some((reference) => reference.isWrite() && !reference.init)) {
-      return staticString(sourceCode, definition.node.init, depth + 1);
+      return staticString(sourceCode, definition.node.init, budget, depth + 1);
     }
   }
   return null;
