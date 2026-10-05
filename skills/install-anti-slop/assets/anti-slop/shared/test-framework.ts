@@ -40,7 +40,8 @@ export function isTestFrameworkObject(
     }
     const source = definition.parent.source.value;
     const name = importedName(definition.node);
-    return (source === "vitest" && name === "vi") || (source === "@jest/globals" && name === "jest");
+    return ((source === "vitest" || source === "vite-plus/test" || source === "@vitest/spy") && name === "vi") ||
+      (source === "@jest/globals" && name === "jest");
   });
 }
 

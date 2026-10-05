@@ -1,9 +1,10 @@
 import { defineRule } from "@oxlint/plugins";
 
 import { isPackageImport } from "../shared/imported-module.ts";
+import { resolveVariable } from "../shared/local-bindings.ts";
 import { importedName, isTestFrameworkObject, memberName } from "../shared/test-framework.ts";
 
-import type { ESTree } from "@oxlint/plugins";
+import type { ESTree, SourceCode, Variable } from "@oxlint/plugins";
 
 const frameworkMethods = new Set([
   "fn", "spyOn", "mock", "doMock", "unmock", "doUnmock", "unstable_mockModule",
@@ -25,11 +26,58 @@ const mockMatchers = new Set([
 ]);
 const mockMetadata = new Set(["calls", "results", "lastCall", "instances", "invocationCallOrder"]);
 const mockImports = new Set(["Mock", "MockInstance", "Mocked", "MockedFunction", "MockedObject", "MockedClass"]);
-const frameworkModules = new Set(["vitest", "@jest/globals", "jest-mock"]);
+const frameworkModules = new Set(["vitest", "vite-plus/test", "@vitest/spy", "@jest/globals", "jest-mock"]);
 const defaultModules = [
   "sinon", "msw", "nock", "fetch-mock", "vitest-mock-extended", "jest-mock-extended",
-  "ts-mockito", "testdouble", "aws-sdk-client-mock",
+  "ts-mockito", "testdouble", "aws-sdk-client-mock", "@vitest/spy",
 ];
+
+/** Follow constant aliases back to a framework object or one of its mocking APIs. */
+function mockingSource(
+  sourceCode: SourceCode,
+  expression: ESTree.Expression,
+  visited = new Set<Variable>(),
+): "framework" | "method" | null {
+  if (expression.type === "Identifier") {
+    const identifierName = expression.name;
+    if (isTestFrameworkObject(sourceCode, expression)) return "framework";
+    const variable = resolveVariable(expression, sourceCode);
+    if (variable === null || variable.defs.length !== 1 || visited.has(variable)) return null;
+    const [definition] = variable.defs;
+    if (definition.type === "ImportBinding" && definition.parent?.type === "ImportDeclaration" &&
+      isPackageImport(definition.parent.source, ["@vitest/spy"])) {
+      if (definition.node.type === "ImportNamespaceSpecifier") return "framework";
+      const name = importedName(definition.node);
+      return name !== null && frameworkMethods.has(name) ? "method" : null;
+    }
+    if (definition.type !== "Variable" || definition.node.type !== "VariableDeclarator" ||
+      definition.node.init === null || definition.parent?.type !== "VariableDeclaration" ||
+      definition.parent.kind !== "const") return null;
+    const nextVisited = new Set(visited).add(variable);
+    const { id, init } = definition.node;
+    if (id.type === "Identifier") return mockingSource(sourceCode, init, nextVisited);
+    if (id.type !== "ObjectPattern" || mockingSource(sourceCode, init, nextVisited) !== "framework") return null;
+    for (const property of id.properties) {
+      if (property.type !== "Property") continue;
+      const binding = property.value.type === "AssignmentPattern" ? property.value.left : property.value;
+      if (binding.type !== "Identifier" || binding.name !== identifierName) continue;
+      const name = property.computed
+        ? property.key.type === "Literal" && typeof property.key.value === "string" ? property.key.value : null
+        : property.key.type === "Identifier" ? property.key.name : null;
+      return name !== null && frameworkMethods.has(name) ? "method" : null;
+    }
+    return null;
+  }
+  if (expression.type === "MemberExpression") {
+    const name = memberName(expression);
+    return name !== null && frameworkMethods.has(name) &&
+      mockingSource(sourceCode, expression.object, visited) === "framework" ? "method" : null;
+  }
+  if (expression.type === "CallExpression" && expression.callee.type === "MemberExpression" &&
+    memberName(expression.callee) === "bind" &&
+    mockingSource(sourceCode, expression.callee.object, visited) === "method") return "method";
+  return null;
+}
 
 /** Ban mocking APIs, mock assertions and mocking libraries. */
 export const noMockingRule = defineRule({
@@ -68,10 +116,14 @@ export const noMockingRule = defineRule({
             context.report({ node, messageId: "mockImport" });
           }
         }
+        if (callee.type !== "Super" && mockingSource(context.sourceCode, callee) === "method") {
+          context.report({ node, messageId: "mocking" });
+          return;
+        }
         if (callee.type !== "MemberExpression") return;
         const name = memberName(callee);
         if (name === null) return;
-        if (mockMethods.has(name) || (frameworkMethods.has(name) && isTestFrameworkObject(context.sourceCode, callee.object))) {
+        if (mockMethods.has(name)) {
           context.report({ node, messageId: "mocking" });
         } else if (mockMatchers.has(name)) {
           context.report({ node, messageId: "mockAssertion" });
