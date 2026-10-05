@@ -169,13 +169,25 @@ Computed string member access counts too.
 
 Framework APIs are recognised from `vitest`, `vite-plus/test`, `@vitest/spy`,
 `@jest/globals`, and `jest-mock`, including namespace imports, `jest-mock` default
-interop, and static-string dynamic imports and `require()`. Same-file analysis
-follows bindings with no reassignment, static object/array literal members and
-destructuring (including rest), erased TypeScript wrappers, and `.bind()`,
-`.call()`, and `.apply()`. It stops at reassigned bindings, dynamic keys, unknown
-spreads, and directly changed holders; it does not trace arbitrary functions,
-cross-file barrels, mutations through other aliases, or mock configuration method
-aliases.
+interop, static-string dynamic imports, `require()` and stable loader aliases.
+Free `vi`/`jest` names and their properties on unshadowed `globalThis`, `global`,
+`window`, and `self` are recognised. Same-file analysis follows stable bindings,
+static object/array members and known spreads, destructuring (including rest),
+erased TypeScript wrappers, sequence/conditional/logical expressions, and
+`.bind()`, `.call()`, and `.apply()`. Computed keys can use string literals,
+interpolation-free templates, string concatenation, and constant string bindings.
+Wildcard framework re-exports expose mocking tools and are reported; erased
+factory-type imports/exports are allowed, while explicit mock-type names remain
+banned.
+
+Analysis stops at reassigned bindings, unknown keys/spreads, and holders changed
+by assignments, deletion, or known object/array mutators, including through local
+aliases. It does not trace static class fields, getters, arbitrary functions or
+Promise `.then()` import callbacks, ambient declarations without runtime
+provenance, `new Function` code, cross-file barrels, or mock configuration/matcher
+method aliases. Recursive projections, keys, branches, and spread expansion are
+bounded, and each factory lookup has a work limit; unresolved or exhausted paths
+produce no factory diagnostic.
 
 Bad:
 

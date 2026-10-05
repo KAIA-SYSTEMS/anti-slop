@@ -9,6 +9,78 @@ const mockImport = { messageId: "mockImport" };
 
 tester.run("anti-slop/no-mocking", noMockingRule, {
   valid: [
+    {
+      code: ["import { vi } from 'vitest';", "const a0 = vi.fn;", ...Array.from({ length: 30 }, (_, index) => `const a${index + 1} = cond ? a${index} : a${index};`), "a30();"].join("\n"),
+    },
+    {
+      code: ["import { vi } from 'vitest';", ...Array.from({ length: 20001 }, (_, index) => `const a${index} = ${index === 0 ? "vi.fn" : `a${index - 1}`};`), "a20000();"].join("\n"),
+    },
+    ...[
+      "const [alias] = [api]",
+      "const { holder: alias } = { holder: api }",
+      "const alias = cond ? api : api",
+      "const alias = api || other",
+      "const alias = (0, api)",
+      "let alias; alias = api",
+    ].map((declaration) => ({ code: `import { vi } from "vitest"; const api = { make: vi.fn }; ${declaration}; Object.assign(alias, { make: realFunction }); api.make();` })),
+    { code: "import { vi } from 'vitest'; const api = { make: vi.fn }; Object.assign((0, api), { make: realFunction }); api.make();" },
+    { code: "import { vi } from 'vitest'; const api = { make: vi.fn }; Object[`assign`](api, { make: realFunction }); api.make();" },
+    { code: "import { vi } from \"vitest\"; class Tools { static make = vi.fn; } Tools.make();" }, // N07
+    { code: "import { vi } from \"vitest\"; Reflect.apply(vi.fn, vi, []);" }, // N09
+    { code: "new Function(\"return vi.fn()\")();" }, // N10
+    { code: "import(\"vitest\").then(m => m.vi.fn());" }, // N12
+    { code: "declare const vi: {fn():void}; vi.fn();" }, // N21
+    { code: "export type {fn} from \"jest-mock\";" }, // N28
+    { code: "(0, expect(handler).toHaveBeenCalled)();" }, // N29
+    { code: "const own = {spyOn(){return 2}}; expect(own.spyOn()).toBe(2);" }, // P01
+    { code: "import vi from \"./data\"; vi.fn();" }, // P02
+    { code: "const mockFn = () => 1; const spyOn = () => 2; mockFn(); spyOn();" }, // P03
+    { code: "const someMock = {fn(){return 1}}; const {fn} = someMock; fn();" }, // P04
+    { code: "const text = \"vi.fn()\"; /* vi.spyOn() */ // jest.fn()\n console.log(text);" }, // P05
+    { code: "import { vi } from \"vitest\"; type Factory = typeof vi.fn; declare const x: Factory;" }, // P06
+    { code: "import { vi } from \"vitest\"; try { throw {}; } catch (vi) { vi.fn(); }" }, // P07
+    { code: "import { vi } from \"vitest\"; for (const vi of objects) { vi.fn(); }" }, // P08
+    { code: "import { vi } from \"vitest\"; const make = vi.fn; { const make = () => 2; make(); }" }, // P09
+    { code: "import { vi } from \"vitest\"; class viLocal { fn(){} } function work(vi:viLocal){vi.fn()}" }, // P10
+    { code: "import * as ns from \"./vitest-helper\"; ns.vi.fn();" }, // P11
+    { code: "function require(name){return {fn(){return 1}}}; require(\"@vitest/spy\").fn();" }, // P12
+    { code: "import { vi } from \"vitest\"; const api = {make: vi.fn}; api.make = () => 1; api.make();" }, // P13
+    { code: "import { vi } from \"vitest\"; const api = {make: vi.fn}; ({make:api.make} = {make: () => 1}); api.make();" }, // P14
+    { code: "const api = {fn: undefined}; const {fn = () => 1} = api; fn();" }, // P15
+    { code: "import { vi } from \"vitest\"; const api = {make: vi.fn}; Object.assign(api, {make: () => 1}); api.make();" }, // P16
+    { code: "declare const vi: { fn(): void }; vi.fn();" }, // P17
+    { code: "import { vi } from \"vitest\"; let make = vi.fn; function replace(){ make = () => 1; } replace(); make();" }, // P18
+    { code: "import { vi } from \"vitest\"; function run(make = () => 1) { make(); } run();" }, // P20
+    { code: "const a = b; const b = a; a();" }, // C01
+    { code: "const a = {make: b}; const b = {make: a}; a.make.make();" }, // C02
+    { code: "import { vi } from \"vitest\"; const { [key]: excluded, ...rest } = vi; rest.fn();" }, // C04
+    { code: "class A extends B {constructor(){super(...args)}}" }, // C07
+    { code: "class A {#fn(){} run(){this.#fn()}}" }, // C08
+    { code: "import { vi } from \"vitest\"; let make = vi.fn; function replace(){ [make] = [real]; } make();" }, // C09
+    { code: "import { vi } from \"vitest\"; const api = {make: vi.fn}; delete api.make; api.make?.();" }, // C10
+    { code: "import {vi} from \"vitest\"; const api = {self: api, make: vi.fn}; api.self.make();" }, // D01
+    { code: "import {vi} from \"vitest\"; const api = {make: vi.fn}; [api.make] = [() => 1]; expect(api.make()).toBe(1);" }, // D02
+    { code: "function require(name: string) {return {fn: () => 1}}; expect(require(\"@vitest/spy\").fn()).toBe(1);" }, // D03
+    { code: "import {vi} from \"vitest\"; const api = {make: vi.fn}; Object.assign(api, {make: () => 1}); expect(api.make()).toBe(1);" }, // D04
+    { code: "import {vi} from \"vitest\"; const api = {get make(){return vi.fn}}; api.make();" }, // D06
+    { code: "import {vi} from \"vitest\"; export const make = vi.fn;" }, // D07
+    { code: "import type {fn} from \"jest-mock\"; export type Factory = typeof fn;" }, // D10
+    { code: "import {vi} from \"vitest\"; const api: {make: () => object} = {make: vi.fn}; [api.make] = [() => ({ok:true})]; expect(api.make()).toEqual({ok:true});" }, // D11
+    { code: "import {vi} from \"vitest\"; const api: {make: () => object} = {make: vi.fn}; Object.assign(api, {make: () => ({ok:true})}); expect(api.make()).toEqual({ok:true});" }, // D12
+    { code: "import {vi} from \"vitest\"; const api = {make: vi.fn}; ({make:api[\"make\"]} = {make: () => 1}); expect(api.make()).toBe(1);" }, // D09
+    ...["Object.assign(TARGET, { make: realFunction })", "Object.defineProperty(TARGET, \"make\", { value: realFunction })", "Object.defineProperties(TARGET, { make: { value: realFunction } })", "Reflect.set(TARGET, \"make\", realFunction)", "[TARGET.make] = [realFunction]", "({ make: TARGET.make } = other)", "({ make: [TARGET.make] } = other)", "[...TARGET.make] = other", "TARGET.make++", "delete TARGET.make", "for (TARGET.make of values) {}", "for (TARGET.make in values) {}"].flatMap((mutation) => ["api", "alias"].map((target) => ({ code: `import { vi } from "vitest"; const api = { make: vi.fn }; const alias = api; ${mutation.replaceAll("TARGET", target)}; api.make(); alias.make();` }))),
+    ...["splice", "push", "pop", "shift", "unshift", "sort", "reverse", "fill", "copyWithin"].flatMap((method) => ["api", "alias"].map((target) => ({ code: `import { vi } from "vitest"; const api = [vi.fn]; const alias = api; ${target}.${method}(realFunction); api[0](); alias[0]();` }))),
+    { code: "import { vi } from 'vitest'; const api = { make: vi.fn }; const alias = api; const another = alias; Object.assign(another, { make: realFunction }); api.make();" },
+    { code: "import { vi } from 'vitest'; const api = { nested: { make: vi.fn } }; const { nested } = api; Object.assign(nested, { make: realFunction }); api.nested.make();" },
+    ...["globalThis", "global", "window", "self"].flatMap((base) => ["vi", "jest"].map((api) => ({ code: `const ${base} = { ${api}: { fn() {} } }; ${base}.${api}.fn();` }))),
+    { code: "const require = (name: string) => ({ vi: { fn() {} } }); const load = require; load('vitest').vi.fn();" },
+    { code: "let load = require; load = localLoad; load('vitest').vi.fn();" },
+    { code: "import { vi } from 'vitest'; let key = 'fn'; key = 'real'; vi[key]();" },
+    { code: "import { vi } from 'vitest'; const api = { ...{ make: vi.fn }, ...other }; api.make();" },
+    { code: "import { vi } from 'vitest'; const api = { ...{ make: vi.fn }, ...{ make: realFunction } }; api.make();" },
+    { code: "import { vi } from 'vitest'; const api = [...other, ...[vi.fn]]; api[0]();" },
+    { code: "import type { fn } from '@vitest/spy'; export type { fn } from '@vitest/spy';" },
+    { code: "export { type fn } from 'jest-mock'; export type * from 'jest-mock';" },
     "import { vi } from 'vitest'; let make = vi.fn; function replace() { make = realFunction; } make();",
     "import { vi } from 'vitest'; let make = vi.fn; [make] = [realFunction]; make();",
     "import { vi } from 'vitest'; const mocks = { make: vi.fn }; mocks.make = realFunction; mocks.make();",
@@ -81,6 +153,47 @@ tester.run("anti-slop/no-mocking", noMockingRule, {
     { code: "import 'custom-mocks';", options: [{}] },
   ],
   invalid: [
+    { code: "import { vi } from \"vitest\"; vi?.fn();", errors: [mocking] }, // N01
+    { code: "import { vi } from \"vitest\"; vi.fn?.();", errors: [mocking] }, // N02
+    { code: "import { vi } from \"vitest\"; (0, vi.fn)();", errors: [mocking] }, // N03
+    { code: "import { vi } from \"vitest\"; (cond ? vi.fn : vi.spyOn)();", errors: [mocking] }, // N04
+    { code: "import { vi } from \"vitest\"; const { fn = other } = vi; fn();", errors: [mocking] }, // N05
+    { code: "import { vi } from \"vitest\"; export const make = vi.fn; make();", errors: [mocking] }, // N06
+    { code: "import { vi } from \"vitest\"; const wrap = () => () => vi.fn(); wrap()();", errors: [mocking] }, // N08
+    { code: "globalThis.vi.fn();", errors: [mocking] }, // N11
+    { code: "import { vi } from \"vitest\"; vi[`fn`]();", errors: [mocking] }, // N13
+    { code: "import { vi } from \"vitest\"; vi[\"f\" + \"n\"]();", errors: [mocking] }, // N14
+    { code: "import { vi } from \"vitest\"; const key = \"fn\"; vi[key]();", errors: [mocking] }, // N15
+    { code: "import { vi } from \"vitest\"; const make = (0, vi.fn); make();", errors: [mocking] }, // N16
+    { code: "import { vi } from \"vitest\"; const make = vi.fn || vi.spyOn; make();", errors: [mocking] }, // N17
+    { code: "import { vi } from \"vitest\"; const api = { ...vi }; api.fn();", errors: [mocking] }, // N18
+    { code: "import { vi } from \"vitest\"; const fns = [vi.fn]; const api = [...fns]; api[0]();", errors: [mocking] }, // N19
+    { code: "import { vi } from \"vitest\"; const el = <button onClick={() => vi.fn()} />;", languageOptions: { parserOptions: { lang: "tsx" } }, errors: [mocking] }, // N20
+    { code: "import { vi } from \"vitest\"; vi.fn.bind(vi).call(vi);", errors: [mocking] }, // N22
+    { code: "handler.mockReturnValue?.(1);", errors: [mocking] }, // N23
+    { code: "import { vi } from \"vitest\"; const api = { nested: { make: vi.fn } }; const {nested} = api; nested.make();", errors: [mocking] }, // N24
+    { code: "const load = require; load(\"vitest\").vi.fn();", errors: [mocking] }, // N25
+    { code: "export * as mocks from \"jest-mock\";", errors: [mockImport] }, // N26
+    { code: "export * from \"jest-mock\";", errors: [mockImport] }, // N27
+    { code: "import { vi } from \"vitest\"; const api = {...other, make: vi.fn}; api.make();", errors: [mocking] }, // N30
+    { code: "import { vi } from \"vitest\"; const api = [vi.fn, ...other]; api[0]();", errors: [mocking] }, // N31
+    { code: "import { vi } from \"vitest\"; let make = vi.fn; function replace(){let make; make = () => 1;} make();", errors: [mocking] }, // P19
+    { code: "require(...sources); vi.fn(...args);", errors: [mocking] }, // C03
+    { code: "import { vi } from \"vitest\"; const [, ...rest] = [null, vi.fn]; rest[0]();", errors: [mocking] }, // C05
+    { code: "import { vi } from \"vitest\"; const {vi: {fn: make = other}} = {vi}; make();", errors: [mocking] }, // C06
+    { code: "import {vi} from \"vitest\"; (vi.fn || vi.spyOn)();", errors: [mocking] }, // D05
+    ...[50, 5000].map((length) => ({ code: ["import { vi } from 'vitest';", ...Array.from({ length }, (_, index) => `const a${index} = ${index === 0 ? "vi.fn" : `a${index - 1}`};`), `a${length - 1}();`].join("\n"), errors: [mocking] })),
+    ...["(cond ? vi.fn : realFunction)", "(cond ? realFunction : vi.fn)", "(vi.fn || other)", "(other && vi.fn)", "(other ?? vi.fn)", "(vi.fn ?? other)"].map((callee) => ({ code: `import { vi } from "vitest"; ${callee}();`, errors: [mocking] })),
+    ...["globalThis", "global", "window", "self"].flatMap((base) => ["vi", "jest"].filter((api) => base !== "globalThis" || api !== "vi").map((api) => ({ code: `${base}.${api}.fn();`, errors: [mocking] }))),
+    { code: "const load = require; const other = load; other('vitest').vi.fn();", errors: [mocking] },
+    { code: "const load = require; load('@vitest/spy');", errors: [mockImport] },
+    { code: "import { vi } from 'vitest'; const key = 'make'; const api = { [key]: vi.fn }; const { [key]: make } = api; make();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const api = { ...{ make: vi.fn } }; api.make();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const api = [0, ...[vi.fn]]; api[1]();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const api = { ...{ ...{ make: vi.fn } } }; api.make();", errors: [mocking] },
+    ...["vitest", "vite-plus/test", "@vitest/spy", "@jest/globals"].flatMap((module) => ["export *", "export * as mocks"].map((form) => ({ code: `${form} from "${module}";`, errors: [mockImport] }))),
+    { code: "import type { Mock } from '@vitest/spy'; export type { Mock } from '@vitest/spy';", errors: [mockImport, mockImport] },
+    { code: "export { type Mock } from 'jest-mock';", errors: [mockImport] },
     ...[
       ["vitest", "vi"],
       ["vite-plus/test", "vi"],

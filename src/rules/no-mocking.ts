@@ -32,13 +32,40 @@ const defaultModules = [
   "ts-mockito", "testdouble", "aws-sdk-client-mock", "@vitest/spy",
 ];
 
-type MockingSource = "framework" | "method" | null;
+type MockingSource = "framework" | "method" | "require" | null;
+const maxResolutionDepth = 100;
+const maxResolutionSteps = 20_000;
+type ResolutionBudget = { remaining: number; exhausted: boolean };
+const globalObjects = new Set(["globalThis", "global", "window", "self"]);
+const arrayMutators = new Set(["splice", "push", "pop", "shift", "unshift", "sort", "reverse", "fill", "copyWithin"]);
 type PropertyPath = readonly string[];
 
-function propertyKey(node: ESTree.Node, computed: boolean): string | null {
+function staticString(sourceCode: SourceCode, node: ESTree.Node, depth = 0): string | null {
+  if (depth >= maxResolutionDepth) return null;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0) return node.quasis[0].value.cooked;
+  if (node.type === "BinaryExpression" && node.operator === "+") {
+    const left = staticString(sourceCode, node.left, depth + 1);
+    const right = staticString(sourceCode, node.right, depth + 1);
+    return left === null || right === null ? null : left + right;
+  }
+  if (node.type === "Identifier") {
+    const variable = resolveVariable(node, sourceCode);
+    const definition = variable?.defs.length === 1 ? variable.defs[0] : undefined;
+    if (definition?.type === "Variable" && definition.node.type === "VariableDeclarator" &&
+      definition.node.init !== null && definition.parent?.type === "VariableDeclaration" &&
+      definition.parent.kind === "const" &&
+      !variable?.references.some((reference) => reference.isWrite() && !reference.init)) {
+      return staticString(sourceCode, definition.node.init, depth + 1);
+    }
+  }
+  return null;
+}
+
+function propertyKey(sourceCode: SourceCode, node: ESTree.Node, computed: boolean): string | null {
   if (!computed && node.type === "Identifier") return node.name;
-  return node.type === "Literal" && (typeof node.value === "string" || typeof node.value === "number")
-    ? String(node.value) : null;
+  if (node.type === "Literal" && typeof node.value === "number") return String(node.value);
+  return staticString(sourceCode, node);
 }
 
 function arrayIndex(key: string): number | null {
@@ -46,21 +73,22 @@ function arrayIndex(key: string): number | null {
 }
 
 /** Project a destructured binding, including members retained by object/array rest. */
-function bindingPath(pattern: ESTree.Node, name: string, path: PropertyPath): PropertyPath | null {
+function bindingPath(sourceCode: SourceCode, pattern: ESTree.Node, name: string, path: PropertyPath, depth = 0): PropertyPath | null {
+  if (depth >= maxResolutionDepth) return null;
   if (pattern.type === "Identifier") return pattern.name === name ? path : null;
-  if (pattern.type === "AssignmentPattern") return bindingPath(pattern.left, name, path);
+  if (pattern.type === "AssignmentPattern") return bindingPath(sourceCode, pattern.left, name, path, depth + 1);
   if (pattern.type === "ObjectPattern") {
     for (const property of pattern.properties) {
       if (property.type === "RestElement") {
-        const rest = bindingPath(property.argument, name, path);
+        const rest = bindingPath(sourceCode, property.argument, name, path, depth + 1);
         if (rest === null || rest.length === 0) continue;
         const excluded = pattern.properties
           .filter((member) => member.type === "Property")
-          .map((member) => propertyKey(member.key, member.computed));
+          .map((member) => propertyKey(sourceCode, member.key, member.computed));
         return excluded.includes(null) || excluded.includes(rest[0]) ? null : rest;
       }
-      const key = propertyKey(property.key, property.computed);
-      const rest = bindingPath(property.value, name, path);
+      const key = propertyKey(sourceCode, property.key, property.computed);
+      const rest = bindingPath(sourceCode, property.value, name, path, depth + 1);
       if (key !== null && rest !== null) return [key, ...rest];
     }
   }
@@ -68,12 +96,12 @@ function bindingPath(pattern: ESTree.Node, name: string, path: PropertyPath): Pr
     for (const [index, element] of pattern.elements.entries()) {
       if (element === null) continue;
       if (element.type === "RestElement") {
-        const rest = bindingPath(element.argument, name, path);
+        const rest = bindingPath(sourceCode, element.argument, name, path, depth + 1);
         const offset = rest === null || rest.length === 0 ? null : arrayIndex(rest[0]);
         if (rest !== null && offset !== null) return [String(index + offset), ...rest.slice(1)];
         continue;
       }
-      const rest = bindingPath(element, name, path);
+      const rest = bindingPath(sourceCode, element, name, path, depth + 1);
       if (rest !== null) return [String(index), ...rest];
     }
   }
@@ -81,38 +109,71 @@ function bindingPath(pattern: ESTree.Node, name: string, path: PropertyPath): Pr
 }
 
 function unwrap(expression: ESTree.Expression): ESTree.Expression {
-  switch (expression.type) {
-    case "TSAsExpression":
-    case "TSSatisfiesExpression":
-    case "TSNonNullExpression":
-    case "TSTypeAssertion":
-    case "ParenthesizedExpression":
-    case "ChainExpression":
-      return unwrap(expression.expression);
-    default:
-      return expression;
+  while (expression.type === "TSAsExpression" || expression.type === "TSSatisfiesExpression" ||
+    expression.type === "TSNonNullExpression" || expression.type === "TSTypeAssertion" ||
+    expression.type === "ParenthesizedExpression" || expression.type === "ChainExpression") {
+    expression = expression.expression;
   }
+  return expression;
 }
 
-/** A directly changed holder no longer proves the provenance of its members. */
-function hasStableMembers(variable: Variable): boolean {
-  return variable.references.every((reference) => {
-    let node: ESTree.Node = reference.identifier;
-    while (true) {
-      const parent: ESTree.Node = node.parent;
-      if ((parent.type === "MemberExpression" && parent.object === node) ||
-        ((parent.type === "TSAsExpression" || parent.type === "TSSatisfiesExpression" ||
-          parent.type === "TSNonNullExpression" || parent.type === "TSTypeAssertion" ||
-          parent.type === "ParenthesizedExpression" || parent.type === "ChainExpression") &&
-          parent.expression === node)) {
-        node = parent;
-      } else {
-        return !((parent.type === "AssignmentExpression" && parent.left === node) ||
+function mutatesArgument(sourceCode: SourceCode, call: ESTree.CallExpression, target: ESTree.Node): boolean {
+  if (call.arguments[0] !== target) return false;
+  const callee = unwrap(call.callee);
+  if (callee.type !== "MemberExpression" || callee.object.type !== "Identifier") return false;
+  const name = propertyKey(sourceCode, callee.property, callee.computed);
+  return (callee.object.name === "Object" &&
+    (name === "assign" || name === "defineProperty" || name === "defineProperties")) ||
+    (callee.object.name === "Reflect" && name === "set");
+}
+
+/** Changed holders and their local aliases no longer prove member provenance. */
+function hasStableMembers(sourceCode: SourceCode, variable: Variable): boolean {
+  const pending = [variable];
+  const visited = new Set<Variable>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined || visited.has(current)) continue;
+    visited.add(current);
+    for (const reference of current.references) {
+      if (reference.init) continue;
+      let node: ESTree.Node = reference.identifier;
+      while (true) {
+        const parent: ESTree.Node = node.parent;
+        if ((parent.type === "MemberExpression" && parent.object === node) ||
+          ((parent.type === "TSAsExpression" || parent.type === "TSSatisfiesExpression" ||
+            parent.type === "TSNonNullExpression" || parent.type === "TSTypeAssertion" ||
+            parent.type === "ParenthesizedExpression" || parent.type === "ChainExpression") &&
+            parent.expression === node) ||
+          (parent.type === "Property" && parent.value === node) ||
+          parent.type === "ObjectExpression" || parent.type === "ArrayExpression" ||
+          parent.type === "ObjectPattern" || parent.type === "ArrayPattern" ||
+          parent.type === "LogicalExpression" ||
+          (parent.type === "ConditionalExpression" && parent.test !== node) ||
+          (parent.type === "SequenceExpression" && parent.expressions[parent.expressions.length - 1] === node) ||
+          (parent.type === "AssignmentPattern" && parent.left === node) ||
+          (parent.type === "RestElement" && parent.argument === node)) {
+          node = parent;
+          continue;
+        }
+        if ((parent.type === "AssignmentExpression" && parent.left === node) ||
           parent.type === "UpdateExpression" ||
-          (parent.type === "UnaryExpression" && parent.operator === "delete"));
+          (parent.type === "UnaryExpression" && parent.operator === "delete") ||
+          ((parent.type === "ForInStatement" || parent.type === "ForOfStatement") && parent.left === node)) return false;
+        if (parent.type === "CallExpression" &&
+          (mutatesArgument(sourceCode, parent, node) || (parent.callee === node && node.type === "MemberExpression" &&
+            arrayMutators.has(propertyKey(sourceCode, node.property, node.computed) ?? "")))) return false;
+        if (parent.type === "VariableDeclarator" && parent.init === node) {
+          for (const alias of sourceCode.getDeclaredVariables(parent)) pending.push(alias);
+        } else if (parent.type === "AssignmentExpression" && parent.right === node && parent.left.type === "Identifier") {
+          const alias = resolveVariable(parent.left, sourceCode);
+          if (alias !== null) pending.push(alias);
+        }
+        break;
       }
     }
-  });
+  }
+  return true;
 }
 
 function methodSource(path: PropertyPath): MockingSource {
@@ -135,82 +196,195 @@ function moduleSource(module: string, path: PropertyPath): MockingSource {
   return null;
 }
 
-/** Follow stable local aliases and static projections back to a framework mocking API. */
+/** Resolve literal spread sources without trusting mutated or cyclic holders. */
+function spreadValue(sourceCode: SourceCode, expression: ESTree.Expression): ESTree.Expression | null {
+  const visited = new Set<Variable>();
+  while (true) {
+    expression = unwrap(expression);
+    if (expression.type !== "Identifier") return expression;
+    const variable = resolveVariable(expression, sourceCode);
+    if (variable === null || variable.defs.length !== 1 || visited.has(variable)) return null;
+    visited.add(variable);
+    const [definition] = variable.defs;
+    if (definition.type !== "Variable" || definition.node.type !== "VariableDeclarator" ||
+      definition.node.id.type !== "Identifier" || definition.node.init === null ||
+      variable.references.some((reference) => reference.isWrite() && !reference.init) ||
+      !hasStableMembers(sourceCode, variable)) return null;
+    expression = definition.node.init;
+  }
+}
+
+function arrayElements(
+  sourceCode: SourceCode,
+  expression: ESTree.Expression,
+  depth: number,
+  budget: ResolutionBudget,
+): (ESTree.Expression | null)[] | null {
+  if (depth >= maxResolutionDepth || budget.exhausted) {
+    budget.exhausted = true;
+    return null;
+  }
+  const value = spreadValue(sourceCode, expression);
+  if (value?.type !== "ArrayExpression") return null;
+  const elements: (ESTree.Expression | null)[] = [];
+  for (const element of value.elements) {
+    if (budget.remaining-- <= 0) {
+      budget.exhausted = true;
+      return null;
+    }
+    if (element?.type === "SpreadElement") {
+      const spread = arrayElements(sourceCode, element.argument, depth + 1, budget);
+      if (spread === null) return null;
+      for (const element of spread) elements.push(element);
+    } else {
+      elements.push(element);
+    }
+  }
+  return elements;
+}
+
+/** Follow stable aliases iteratively; bound recursive branching and spread expansion. */
 function mockingSource(
   sourceCode: SourceCode,
   expression: ESTree.Expression,
   path: PropertyPath = [],
   visited = new Set<Variable>(),
+  depth = 0,
+  budget: ResolutionBudget = { remaining: maxResolutionSteps, exhausted: false },
 ): MockingSource {
-  expression = unwrap(expression);
-  if (expression.type === "Identifier") {
-    const variable = resolveVariable(expression, sourceCode);
-    if (variable === null || variable.defs.length === 0) {
-      return isTestFrameworkObject(sourceCode, expression) ? frameworkSource(path) : null;
+  if (depth >= maxResolutionDepth || budget.exhausted) {
+    budget.exhausted = true;
+    return null;
+  }
+  const resolve = (value: ESTree.Expression, projection = path): MockingSource => {
+    const source = mockingSource(sourceCode, value, projection, new Set(visited), depth + 1, budget);
+    return budget.exhausted ? null : source;
+  };
+  while (true) {
+    if (budget.remaining-- <= 0 || budget.exhausted) {
+      budget.exhausted = true;
+      return null;
     }
-    if (variable.defs.length !== 1 || visited.has(variable)) return null;
-    const [definition] = variable.defs;
-    if (definition.type === "ImportBinding" && definition.parent?.type === "ImportDeclaration") {
-      const declaration = definition.parent;
-      const specifier = definition.node;
-      if (declaration.importKind === "type" ||
-        (specifier.type === "ImportSpecifier" && specifier.importKind === "type")) return null;
-      if (specifier.type === "ImportNamespaceSpecifier" ||
-        (specifier.type === "ImportDefaultSpecifier" && declaration.source.value === "jest-mock")) {
-        return moduleSource(declaration.source.value, path);
+    expression = unwrap(expression);
+    if (expression.type === "Identifier") {
+      const variable = resolveVariable(expression, sourceCode);
+      if (variable === null || variable.defs.length === 0) {
+        if (expression.name === "require" && path.length === 0) return "require";
+        return isTestFrameworkObject(sourceCode, expression) ? frameworkSource(path) : null;
       }
-      const name = importedName(specifier);
-      return name === null ? null : moduleSource(declaration.source.value, [name, ...path]);
+      if (variable.defs.length !== 1 || visited.has(variable)) return null;
+      const [definition] = variable.defs;
+      if (definition.type === "ImportBinding" && definition.parent?.type === "ImportDeclaration") {
+        const declaration = definition.parent;
+        const specifier = definition.node;
+        if (declaration.importKind === "type" ||
+          (specifier.type === "ImportSpecifier" && specifier.importKind === "type")) return null;
+        if (specifier.type === "ImportNamespaceSpecifier" ||
+          (specifier.type === "ImportDefaultSpecifier" && declaration.source.value === "jest-mock")) {
+          return moduleSource(declaration.source.value, path);
+        }
+        const name = importedName(specifier);
+        return name === null ? null : moduleSource(declaration.source.value, [name, ...path]);
+      }
+      if (definition.type !== "Variable" || definition.node.type !== "VariableDeclarator" ||
+        definition.node.init === null || definition.parent?.type !== "VariableDeclaration" ||
+        (definition.parent.kind !== "const" && definition.parent.kind !== "let") ||
+        variable.references.some((reference) => reference.isWrite() && !reference.init) ||
+        (path.length > 0 && !hasStableMembers(sourceCode, variable))) return null;
+      const projection = bindingPath(sourceCode, definition.node.id, expression.name, path);
+      if (projection === null) return null;
+      visited.add(variable);
+      expression = definition.node.init;
+      path = projection;
+      continue;
     }
-    if (definition.type !== "Variable" || definition.node.type !== "VariableDeclarator" ||
-      definition.node.init === null || definition.parent?.type !== "VariableDeclaration" ||
-      (definition.parent.kind !== "const" && definition.parent.kind !== "let") ||
-      variable.references.some((reference) => reference.isWrite() && !reference.init) ||
-      (path.length > 0 && !hasStableMembers(variable))) return null;
-    const projection = bindingPath(definition.node.id, expression.name, path);
-    return projection === null ? null : mockingSource(
-      sourceCode, definition.node.init, projection, new Set(visited).add(variable),
-    );
-  }
-  if (expression.type === "MemberExpression") {
-    const name = propertyKey(expression.property, expression.computed);
-    return name === null ? null : mockingSource(sourceCode, expression.object, [name, ...path], visited);
-  }
-  if (expression.type === "AwaitExpression") return mockingSource(sourceCode, expression.argument, path, visited);
-  if (expression.type === "ImportExpression") {
-    return expression.source.type === "Literal" && typeof expression.source.value === "string"
-      ? moduleSource(expression.source.value, path) : null;
-  }
-  if (expression.type === "CallExpression") {
-    const callee = unwrap(expression.callee);
-    if (callee.type === "Identifier" && callee.name === "require" &&
-      (resolveVariable(callee, sourceCode)?.defs.length ?? 0) === 0) {
-      const source = expression.arguments[0];
-      return source?.type === "Literal" && typeof source.value === "string"
-        ? moduleSource(source.value, path) : null;
-    }
-    if (callee.type === "MemberExpression" && memberName(callee) === "bind" &&
-      mockingSource(sourceCode, callee.object, [], visited) === "method") return methodSource(path);
-  }
-  const [key, ...rest] = path;
-  if (path.length === 0) return null;
-  if (expression.type === "ObjectExpression") {
-    for (const property of [...expression.properties].reverse()) {
-      if (property.type === "SpreadElement") return null;
-      const name = propertyKey(property.key, property.computed);
+    if (expression.type === "MemberExpression") {
+      const name = propertyKey(sourceCode, expression.property, expression.computed);
       if (name === null) return null;
-      if (name === key) return property.kind === "init"
-        ? mockingSource(sourceCode, property.value, rest, visited) : null;
+      const base = unwrap(expression.object);
+      if ((name === "vi" || name === "jest") && base.type === "Identifier" &&
+        globalObjects.has(base.name) && (resolveVariable(base, sourceCode)?.defs.length ?? 0) === 0) {
+        return frameworkSource(path);
+      }
+      expression = expression.object;
+      path = [name, ...path];
+      continue;
     }
+    if (expression.type === "AwaitExpression") {
+      expression = expression.argument;
+      continue;
+    }
+    if (expression.type === "SequenceExpression") {
+      expression = expression.expressions[expression.expressions.length - 1];
+      continue;
+    }
+    if (expression.type === "ConditionalExpression" || expression.type === "LogicalExpression") {
+      const left = resolve(expression.type === "ConditionalExpression" ? expression.consequent : expression.left);
+      const right = resolve(expression.type === "ConditionalExpression" ? expression.alternate : expression.right);
+      if (budget.exhausted) return null;
+      return left === "method" || right === "method" ? "method" : left ?? right;
+    }
+    if (expression.type === "ImportExpression") {
+      return expression.source.type === "Literal" && typeof expression.source.value === "string"
+        ? moduleSource(expression.source.value, path) : null;
+    }
+    if (expression.type === "CallExpression") {
+      const callee = unwrap(expression.callee);
+      if (resolve(callee, []) === "require") {
+        const source = expression.arguments[0];
+        return source?.type === "Literal" && typeof source.value === "string"
+          ? moduleSource(source.value, path) : null;
+      }
+      if (callee.type === "MemberExpression" && memberName(callee) === "bind" &&
+        resolve(callee.object, []) === "method") return methodSource(path);
+    }
+    const [key, ...rest] = path;
+    if (path.length === 0) return null;
+    if (expression.type === "ObjectExpression") {
+      const properties = [...expression.properties];
+      let expansions = 0;
+      while (properties.length > 0) {
+        const property = properties.pop();
+        if (property === undefined) break;
+        if (property.type === "SpreadElement") {
+          if (++expansions >= maxResolutionDepth) return null;
+          if (resolve(property.argument, []) === "framework") return frameworkSource(path);
+          const value = spreadValue(sourceCode, property.argument);
+          if (value?.type !== "ObjectExpression") return null;
+          for (const property of value.properties) properties.push(property);
+          continue;
+        }
+        const name = propertyKey(sourceCode, property.key, property.computed);
+        if (name === null) return null;
+        if (name === key) return property.kind === "init" ? resolve(property.value, rest) : null;
+      }
+      return null;
+    }
+    if (expression.type === "ArrayExpression") {
+      let index = arrayIndex(key);
+      if (index === null) return null;
+      let selected: ESTree.Expression | null = null;
+      for (const element of expression.elements) {
+        if (element?.type === "SpreadElement") {
+          const spread = arrayElements(sourceCode, element.argument, depth + 1, budget);
+          if (spread === null) return null;
+          if (index < spread.length) {
+            selected = spread[index];
+            break;
+          }
+          index -= spread.length;
+        } else if (index-- === 0) {
+          selected = element;
+          break;
+        }
+      }
+      if (selected === null) return null;
+      expression = selected;
+      path = rest;
+      continue;
+    }
+    return null;
   }
-  if (expression.type === "ArrayExpression") {
-    const index = arrayIndex(key);
-    if (index === null || expression.elements.slice(0, index + 1).some((element) => element?.type === "SpreadElement")) return null;
-    const element = expression.elements[index];
-    return element == null || element.type === "SpreadElement"
-      ? null : mockingSource(sourceCode, element, rest, visited);
-  }
-  return null;
 }
 
 /** Ban mocking APIs, mock assertions and mocking libraries. */
@@ -244,13 +418,14 @@ export const noMockingRule = defineRule({
     return {
       CallExpression(node) {
         const callee = node.callee;
-        if (callee.type === "Identifier" && callee.name === "require") {
+        const origin = callee.type === "Super" ? null : mockingSource(context.sourceCode, callee);
+        if (origin === "require") {
           const source = node.arguments[0];
           if (source !== undefined && source.type !== "SpreadElement" && isMockingModule(source)) {
             context.report({ node, messageId: "mockImport" });
           }
         }
-        if (callee.type !== "Super" && mockingSource(context.sourceCode, callee) === "method") {
+        if (origin === "method") {
           context.report({ node, messageId: "mocking" });
           return;
         }
@@ -270,7 +445,9 @@ export const noMockingRule = defineRule({
         }
       },
       ImportDeclaration(node) {
-        if (isMockingModule(node.source)) {
+        if (isMockingModule(node.source) && !(frameworkModules.has(node.source.value) &&
+          (node.importKind === "type" || (node.specifiers.length > 0 && node.specifiers.every((specifier) =>
+            specifier.type === "ImportSpecifier" && specifier.importKind === "type"))))) {
           context.report({ node, messageId: "mockImport" });
         } else if (frameworkModules.has(node.source.value)) {
           for (const specifier of node.specifiers) {
@@ -286,20 +463,25 @@ export const noMockingRule = defineRule({
       },
       ExportNamedDeclaration(node) {
         if (node.source === null) return;
-        if (isMockingModule(node.source)) {
+        if (isMockingModule(node.source) && !(frameworkModules.has(node.source.value) &&
+          (node.exportKind === "type" || node.specifiers.every((specifier) => specifier.exportKind === "type")))) {
           context.report({ node, messageId: "mockImport" });
           return;
         }
         for (const specifier of node.specifiers) {
           const name = specifier.local.type === "Identifier" ? specifier.local.name : specifier.local.value;
-          if (moduleSource(node.source.value, [name]) === "method" ||
+          if ((node.exportKind !== "type" && specifier.exportKind !== "type" &&
+            moduleSource(node.source.value, [name]) === "method") ||
             (frameworkModules.has(node.source.value) && mockImports.has(name))) {
             context.report({ node: specifier, messageId: "mockImport" });
           }
         }
       },
       ExportAllDeclaration(node) {
-        if (isMockingModule(node.source)) context.report({ node, messageId: "mockImport" });
+        if ((node.exportKind !== "type" && frameworkModules.has(node.source.value)) ||
+          (isMockingModule(node.source) && !(node.exportKind === "type" && frameworkModules.has(node.source.value)))) {
+          context.report({ node, messageId: "mockImport" });
+        }
       },
     };
   },
