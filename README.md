@@ -167,6 +167,16 @@ reports mock configuration methods on any receiver, reads of `.mock.calls`,
 and call/return mock matchers, including after `.not`, `.resolves`, or `.rejects`.
 Computed string member access counts too.
 
+The rule follows `vi` and `jest` from `vitest`, `vite-plus/test`, `@vitest/spy`,
+`@jest/globals` and as globals; a `const` alias of the object or of one of its
+mocking functions; object destructuring with rename and default; `.bind`; and
+functions imported from `@vitest/spy`. TypeScript wrappers (`as`, `satisfies`,
+non-null `!`, `<T>x` assertions and parentheses) are unwrapped. It also recognises
+the mock methods, matchers and mocking libraries described here. It does not
+chase anything else.
+
+Not followed: reassigned/`let` bindings, aliases stored in object or array literals, computed or concatenated keys beyond string literals, spreads, conditional/logical selection, `require` rebinding or template-string module names, cross-file barrels, or anything else not named above.
+
 Bad:
 
 ```ts
@@ -183,14 +193,15 @@ expect(await userStore.findById(saved.id)).toEqual(saved);
 ```
 
 Imports of `Mock`, `MockInstance`, `Mocked`, `MockedFunction`, `MockedObject`, and
-`MockedClass` from `vitest`, `@jest/globals`, or `jest-mock` are reported, including
-type-only imports. Static imports, dynamic `import()`, and `require()` of mocking
+`MockedClass` from `vitest`, `vite-plus/test`, `@vitest/spy`, `@jest/globals`, or
+`jest-mock` are reported, including type-only imports. Static imports, dynamic
+`import()`, and `require()` of mocking
 libraries are also reported.
 
 The `modules` option replaces the default banned package list:
 `sinon`, `msw`, `nock`, `fetch-mock`, `vitest-mock-extended`, `jest-mock-extended`,
-`ts-mockito`, `testdouble`, and `aws-sdk-client-mock`. Each package also matches its
-subpaths, such as `msw/node`.
+`ts-mockito`, `testdouble`, `aws-sdk-client-mock`, and `@vitest/spy`. Each package
+also matches its subpaths, such as `msw/node`.
 
 ```ts
 "anti-slop/no-mocking": ["error", { modules: ["msw", "custom-mocks"] }]
