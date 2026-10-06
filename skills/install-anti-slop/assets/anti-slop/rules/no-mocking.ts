@@ -141,8 +141,18 @@ function mutatesArgument(sourceCode: SourceCode, call: ESTree.CallExpression, ta
     (callee.object.name === "Reflect" && name === "set");
 }
 
+const stableMembersCache = new WeakMap<Variable, boolean>();
+
 /** Changed holders and their local aliases no longer prove member provenance. */
 function hasStableMembers(sourceCode: SourceCode, variable: Variable): boolean {
+  const cached = stableMembersCache.get(variable);
+  if (cached !== undefined) return cached;
+  const stable = scanStableMembers(sourceCode, variable);
+  stableMembersCache.set(variable, stable);
+  return stable;
+}
+
+function scanStableMembers(sourceCode: SourceCode, variable: Variable): boolean {
   const pending = [variable];
   const visited = new Set<Variable>();
   while (pending.length > 0) {

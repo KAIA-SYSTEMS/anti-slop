@@ -186,8 +186,9 @@ aliases. It does not trace static class fields, getters, arbitrary functions or
 Promise `.then()` import callbacks, ambient declarations without runtime
 provenance, `new Function` code, cross-file barrels, or mock configuration/matcher
 method aliases. Recursive projections, keys, branches, and spread expansion are
-bounded, and each factory lookup has a work limit; unresolved or exhausted paths
-produce no factory diagnostic.
+bounded, each factory lookup has a work limit, and the holder-stability scan of a
+variable runs once per variable; unresolved or exhausted paths produce no factory
+diagnostic.
 
 Known gaps, kept on purpose (none occurs in ordinary test code; the rule reported nothing on
 700 real test files of two projects): shapes that never call a framework function but mention
