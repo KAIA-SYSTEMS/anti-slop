@@ -167,36 +167,15 @@ reports mock configuration methods on any receiver, reads of `.mock.calls`,
 and call/return mock matchers, including after `.not`, `.resolves`, or `.rejects`.
 Computed string member access counts too.
 
-Framework APIs are recognised from `vitest`, `vite-plus/test`, `@vitest/spy`,
-`@jest/globals`, and `jest-mock`, including namespace imports, `jest-mock` default
-interop, static-string dynamic imports, `require()` and stable loader aliases.
-Free `vi`/`jest` names and their properties on unshadowed `globalThis`, `global`,
-`window`, and `self` are recognised. Same-file analysis follows stable bindings,
-static object/array members and known spreads, destructuring (including rest),
-erased TypeScript wrappers, sequence/conditional/logical expressions, and
-`.bind()`, `.call()`, and `.apply()`. Computed keys can use string literals,
-interpolation-free templates, string concatenation, and constant string bindings.
-Wildcard framework re-exports expose mocking tools and are reported; erased
-factory-type imports/exports are allowed, while explicit mock-type names remain
-banned.
+The rule follows `vi` and `jest` from `vitest`, `vite-plus/test`, `@vitest/spy`,
+`@jest/globals` and as globals; a `const` alias of the object or of one of its
+mocking functions; object destructuring with rename and default; `.bind`; and
+functions imported from `@vitest/spy`. TypeScript wrappers (`as`, `satisfies`,
+non-null `!`, `<T>x` assertions and parentheses) are unwrapped. It also recognises
+the mock methods, matchers and mocking libraries described here. It does not
+chase anything else.
 
-Analysis stops at reassigned bindings, unknown keys/spreads, and holders changed
-by assignments, deletion, or known object/array mutators, including through local
-aliases. It does not trace static class fields, getters, arbitrary functions or
-Promise `.then()` import callbacks, ambient declarations without runtime
-provenance, `new Function` code, cross-file barrels, or mock configuration/matcher
-method aliases. Recursive projections, keys, branches, and spread expansion are
-bounded, each factory lookup has a work limit, and the holder-stability scan of a
-variable runs once per variable; unresolved or exhausted paths produce no factory
-diagnostic.
-
-Known gaps, kept on purpose (none occurs in ordinary test code; the rule reported nothing on
-700 real test files of two projects): shapes that never call a framework function but mention
-one (`vi.fn && (() => 1)`, `false ? vi.fn : real`) are still reported; an alias stored into a
-property of an existing object (`box.api = api`) is not tracked for stability; and these are
-missed: `{ make: vi.fn, ...vi }.make()`, `vi["fn" as const]()`, destructuring through constant
-keys, template-literal keys on mock configuration accessors, ``require(`vitest`)``, a bound
-`require`, and `const scope = globalThis; scope.vi.fn()`.
+Not followed: reassigned/`let` bindings, aliases stored in object or array literals, computed or concatenated keys beyond string literals, spreads, conditional/logical selection, `require` rebinding or template-string module names, cross-file barrels, or anything else not named above.
 
 Bad:
 
@@ -217,8 +196,7 @@ Imports of `Mock`, `MockInstance`, `Mocked`, `MockedFunction`, `MockedObject`, a
 `MockedClass` from `vitest`, `vite-plus/test`, `@vitest/spy`, `@jest/globals`, or
 `jest-mock` are reported, including type-only imports. Static imports, dynamic
 `import()`, and `require()` of mocking
-libraries are also reported, as are re-exports of banned libraries or named
-framework mocking APIs.
+libraries are also reported.
 
 The `modules` option replaces the default banned package list:
 `sinon`, `msw`, `nock`, `fetch-mock`, `vitest-mock-extended`, `jest-mock-extended`,
