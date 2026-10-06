@@ -71,9 +71,9 @@ function mockingSource(
       if (property.type !== "Property") continue;
       const binding = property.value.type === "AssignmentPattern" ? property.value.left : property.value;
       if (binding.type !== "Identifier" || binding.name !== identifierName) continue;
-      const name = property.computed
-        ? property.key.type === "Literal" && typeof property.key.value === "string" ? property.key.value : null
-        : property.key.type === "Identifier" ? property.key.name : null;
+      const name = property.key.type === "Literal" && typeof property.key.value === "string"
+        ? property.key.value
+        : !property.computed && property.key.type === "Identifier" ? property.key.name : null;
       return name !== null && frameworkMethods.has(name) ? "method" : null;
     }
     return null;

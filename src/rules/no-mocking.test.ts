@@ -17,6 +17,7 @@ tester.run("anti-slop/no-mocking", noMockingRule, {
     "const vi = { useFakeTimers() {} }; const jest = { useFakeTimers() {} }; vi.useFakeTimers(); jest.useFakeTimers();",
     ...["vi", "jest"].map((api) => `${api}.useFakeTimers(); const clock = ${api}; clock.useFakeTimers(); const start = ${api}.useFakeTimers; start(); const { useFakeTimers: renamed, useRealTimers: reset = fallback } = ${api}; renamed(); reset(); const bound = ${api}.useFakeTimers.bind(${api}); bound();`),
     "const { fn: make = fallback } = service; make();",
+    "import { vi } from 'vitest'; const { \"useFakeTimers\": make } = vi; make();",
     "const service = { fn() {} }; const make = (service.fn.bind as typeof service.fn.bind)(service); make();",
     { code: "import { nonMocking } from '@vitest/spy'; nonMocking();", options: [{ modules: [] }] },
     ...["service.fn as typeof service.fn", "service.fn satisfies typeof service.fn", "service.fn!", "<typeof service.fn>service.fn", "(service.fn)"].flatMap((expression) => [
@@ -80,6 +81,8 @@ tester.run("anti-slop/no-mocking", noMockingRule, {
       { code: `import { vi } from 'vitest'; const api = ${expression}; api.fn();`, errors: [mocking] },
       { code: `import { vi } from 'vitest'; const { fn: make } = ${expression}; make();`, errors: [mocking] },
     ]),
+    { code: "import { vi } from 'vitest'; const { \"fn\": make } = vi; make();", errors: [mocking] },
+    { code: "import { vi } from 'vitest'; const { \"fn\": make = fallback } = vi; make();", errors: [mocking] },
     { code: "import { vi } from 'vitest'; const make = (vi.fn.bind as typeof vi.fn.bind)(vi); make();", errors: [mocking] },
     { code: "(handler.mockReturnValue as typeof handler.mockReturnValue)(1);", errors: [mocking] },
     { code: "(expect(handler).toHaveBeenCalled satisfies Function)();", errors: [mockAssertion] },
