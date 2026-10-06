@@ -189,6 +189,14 @@ method aliases. Recursive projections, keys, branches, and spread expansion are
 bounded, and each factory lookup has a work limit; unresolved or exhausted paths
 produce no factory diagnostic.
 
+Known gaps, kept on purpose (none occurs in ordinary test code; the rule reported nothing on
+700 real test files of two projects): shapes that never call a framework function but mention
+one (`vi.fn && (() => 1)`, `false ? vi.fn : real`) are still reported; an alias stored into a
+property of an existing object (`box.api = api`) is not tracked for stability; and these are
+missed: `{ make: vi.fn, ...vi }.make()`, `vi["fn" as const]()`, destructuring through constant
+keys, template-literal keys on mock configuration accessors, ``require(`vitest`)``, a bound
+`require`, and `const scope = globalThis; scope.vi.fn()`.
+
 Bad:
 
 ```ts
