@@ -41,7 +41,8 @@ export default defineConfig({
   jsPlugins: [
     { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
   ],
-  plugins: ["import"],
+  // A `plugins` list replaces Oxlint's defaults, so keep them next to "import".
+  plugins: ["typescript", "unicorn", "oxc", "import"],
   rules: {
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
@@ -66,7 +67,7 @@ export default defineConfig({
 });
 ```
 
-The same `jsPlugins` entry and rules work under `lint` in a Vite+ config. Add `"import"` to an existing `plugins` list rather than replacing it.
+The same `jsPlugins` entry and rules work under `lint` in a Vite+ config. Add `"import"` to an existing `plugins` list rather than replacing it; with no list yet, write the defaults (`typescript`, `unicorn`, `oxc`) next to it.
 
 ## Rules
 
@@ -88,7 +89,7 @@ The same `jsPlugins` entry and rules work under `lint` in a Vite+ config. Add `"
 - `no-unsafe-utility-type` — rejects `Readonly`, `Partial`, `Required`, `Pick`, and `Omit` applied to loose source contracts rather than concrete owner types.
 - `no-widen-then-assert` — rejects local flows that widen known values and later assert them back.
 - `require-safety-comment-for-type-assertion` — requires each non-const assertion to document its checked invariant.
-- `import/no-cycle` — rejects modules that import each other, directly or through others; cut a loop by moving the shared piece to a module both can import. This is Oxlint's built-in rule, not part of the plugin: the Kaia ruleset enables it.
+- `import/no-cycle` — rejects modules that import each other, directly or through others; cut a loop by moving the shared piece to a module both can import. With its default options, imports written as `import type` do not count. This is Oxlint's built-in rule, not part of the plugin: the Kaia ruleset enables it.
 
 ## Scope and performance
 

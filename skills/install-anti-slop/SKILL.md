@@ -40,7 +40,7 @@ Install the bundled Oxlint plugin into the current repository and integrate it w
 
    For Vite+, add that same entry to `lint.jsPlugins`. Merge it with existing entries instead of replacing them.
 
-   Also add Oxlint's built-in `"import"` plugin to `plugins` (`lint.plugins` for Vite+), merged with the existing list, so the ruleset's `import/no-cycle` runs.
+   Also add Oxlint's built-in `"import"` plugin to `plugins` (`lint.plugins` for Vite+), merged with the existing list, so the ruleset's `import/no-cycle` runs. A `plugins` list replaces Oxlint's default plugins, so when the config has none yet, write `["typescript", "unicorn", "oxc", "import"]`, not `["import"]` alone.
 
    Enable these rules at `"error"`:
 
