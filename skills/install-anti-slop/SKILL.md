@@ -40,6 +40,8 @@ Install the bundled Oxlint plugin into the current repository and integrate it w
 
    For Vite+, add that same entry to `lint.jsPlugins`. Merge it with existing entries instead of replacing them.
 
+   Also add Oxlint's built-in `"import"` plugin to `plugins` (`lint.plugins` for Vite+), merged with the existing list, so the ruleset's `import/no-cycle` runs.
+
    Enable these rules at `"error"`:
 
    ```json
@@ -59,7 +61,8 @@ Install the bundled Oxlint plugin into the current repository and integrate it w
      "anti-slop/no-unknown-type-aliases": "error",
      "anti-slop/no-unsafe-dictionary-type": "error",
      "anti-slop/no-widen-then-assert": "error",
-     "anti-slop/require-safety-comment-for-type-assertion": "error"
+     "anti-slop/require-safety-comment-for-type-assertion": "error",
+     "import/no-cycle": "error"
    }
    ```
 
@@ -70,6 +73,7 @@ Install the bundled Oxlint plugin into the current repository and integrate it w
    - Decode explicitly `unknown` inputs with the project's schema library instead of branching on runtime `typeof`.
    - Rename locally controlled declarations containing `shape`; external member access such as `schema.shape` is allowed.
    - Keep an `unknown` parameter only for unavoidable raw ingress. Add a nearby, substantive `BOUNDARY:` comment naming the external source and decode it immediately.
+   - Cut each import loop by deciding which module belongs at which layer and moving the shared piece down to a module both can import, or by importing a name from its owner instead of through a module that re-exports it. A dynamic `import()`, an inlined copy or a disable comment only hides the loop.
    - Remove avoidable assertions. For the rare assertion backed by a checked invariant, place a specific `SAFETY:` comment immediately before it.
 
 6. Review the final diff and clearly report:

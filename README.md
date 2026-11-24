@@ -41,6 +41,7 @@ export default defineConfig({
   jsPlugins: [
     { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
   ],
+  plugins: ["import"],
   rules: {
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
@@ -59,12 +60,13 @@ export default defineConfig({
     "anti-slop/no-unsafe-map-type": "error",
     "anti-slop/no-unsafe-utility-type": "error",
     "anti-slop/no-widen-then-assert": "error",
-    "anti-slop/require-safety-comment-for-type-assertion": "error"
+    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "import/no-cycle": "error"
   }
 });
 ```
 
-The same `jsPlugins` entry and rules work under `lint` in a Vite+ config.
+The same `jsPlugins` entry and rules work under `lint` in a Vite+ config. Add `"import"` to an existing `plugins` list rather than replacing it.
 
 ## Rules
 
@@ -86,11 +88,13 @@ The same `jsPlugins` entry and rules work under `lint` in a Vite+ config.
 - `no-unsafe-utility-type` — rejects `Readonly`, `Partial`, `Required`, `Pick`, and `Omit` applied to loose source contracts rather than concrete owner types.
 - `no-widen-then-assert` — rejects local flows that widen known values and later assert them back.
 - `require-safety-comment-for-type-assertion` — requires each non-const assertion to document its checked invariant.
+- `import/no-cycle` — rejects modules that import each other, directly or through others; cut a loop by moving the shared piece to a module both can import. This is Oxlint's built-in rule, not part of the plugin: the Kaia ruleset enables it.
 
 ## Scope and performance
 
 These rules use Oxlint's ESTree and lexical scopes, without starting a TypeScript
-compiler, reading imported files, or loading another parser. Rule regression tests
+compiler, reading imported files, or loading another parser. `import/no-cycle` is the
+exception: it is Oxlint's own rule and resolves imports across files in Rust. Rule regression tests
 run through `pnpm test`, never during linting.
 
 The bounded local analysis covers:
